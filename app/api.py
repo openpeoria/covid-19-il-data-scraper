@@ -172,7 +172,7 @@ def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwar
         except ClientError:
             etag = ""
         else:
-            etag = head["ETag"].strip('"')
+            etag = head.get("ETag", "").strip('"')
 
         try:
             s3_obj = bucket.Object(filename)
@@ -198,14 +198,15 @@ def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwar
             else:
                 head = s3_client.head_object(Bucket=bucket_name, Key=filename)
                 meta = head["ResponseMetadata"]
+                headers = meta['HTTPHeaders']
 
                 response = {
                     "ok": True,
                     "message": f"Successfully saved {filename}!",
-                    "last_modified": meta["last-modified"],
-                    "etag": meta["etag"],
-                    "content_length": meta["content-length"],
-                    "status_code": meta["HTTPStatusCode"],
+                    "last_modified": headers.get("last-modified"),
+                    "etag": headers.get("etag", "").strip('"'),
+                    "content_length": headers.get("content-length"),
+                    "status_code": meta.get("HTTPStatusCode"),
                 }
     elif src_pos:
         with open(filename, mode="wb") as dest:
