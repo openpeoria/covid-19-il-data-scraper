@@ -22,7 +22,7 @@ import requests
 import boto3
 import pygogo as gogo
 
-from botocore.exceptions import ClientError, WaiterError
+from botocore.exceptions import ClientError, WaiterError, ProfileNotFound
 
 from faker import Faker
 from flask import (
@@ -61,7 +61,17 @@ blueprint = Blueprint("API", __name__)
 headers = {"Accept": "application/json"}
 fake = Faker()
 
-session = boto3.Session(profile_name="nerevu")
+try:
+    session = boto3.Session(profile_name="nerevu")
+except ProfileNotFound:
+    botoKwargs = {
+        "aws_access_key_id": Config.AWS_ACCESS_KEY_ID,
+        "aws_secret_access_key": Config.AWS_SECRET_ACCESS_KEY,
+        "region_name": Config.AWS_REGION,
+    }
+
+    session = boto3.Session(**botoKwargs)
+
 s3_client = session.client("s3")
 s3_resource = session.resource("s3")
 
@@ -76,6 +86,7 @@ SET_TIMEOUT = Config.SET_TIMEOUT
 LRU_CACHE_SIZE = Config.LRU_CACHE_SIZE
 KEY_WHITELIST = Config.KEY_WHITELIST
 BASE_URL = Config.BASE_URL
+S3_BUCKET = Config.S3_BUCKET
 
 JOB_STATUSES = {
     "deferred": 202,
@@ -131,7 +142,7 @@ def get_error_resp(e, status_code=500):
     }
 
 
-def save_report(report, report_date, use_s3=False, bucketName="covid19-il", **kwargs):
+def save_report(report, report_date, use_s3=False, bucketName=S3_BUCKET, **kwargs):
     filename = f"IL_county_COVID19_data_{report_date}.json"
     options = {"indent": 2, "sort_keys": True, "ensure_ascii": False}
     src = BytesIO()

@@ -88,6 +88,18 @@ class Config(object):
     # Variables warnings
     REQUIRED_SETTINGS = []
     REQUIRED_PROD_SETTINGS = []
+
+    # AWS
+    REQUIRED_PROD_SETTINGS += [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+    ]
+    AWS_ACCESS_KEY_ID = getenv("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_REGION = getenv("AWS_REGION")
+    S3_BUCKET = getenv("S3_BUCKET", "covid19-il")
+
     # RQ
     REQUIRED_PROD_SETTINGS += ["RQ_DASHBOARD_USERNAME", "RQ_DASHBOARD_PASSWORD"]
     RQ_DASHBOARD_REDIS_URL = (
