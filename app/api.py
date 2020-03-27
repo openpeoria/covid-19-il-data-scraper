@@ -64,13 +64,13 @@ fake = Faker()
 try:
     session = boto3.Session(profile_name="nerevu")
 except ProfileNotFound:
-    botoKwargs = {
+    boto_kwargs = {
         "aws_access_key_id": Config.AWS_ACCESS_KEY_ID,
         "aws_secret_access_key": Config.AWS_SECRET_ACCESS_KEY,
         "region_name": Config.AWS_REGION,
     }
 
-    session = boto3.Session(**botoKwargs)
+    session = boto3.Session(**boto_kwargs)
 
 s3_client = session.client("s3")
 s3_resource = session.resource("s3")
@@ -142,7 +142,7 @@ def get_error_resp(e, status_code=500):
     }
 
 
-def save_report(report, report_date, use_s3=False, bucketName=S3_BUCKET, **kwargs):
+def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwargs):
     filename = f"IL_county_COVID19_data_{report_date}.json"
     options = {"indent": 2, "sort_keys": True, "ensure_ascii": False}
     src = BytesIO()
@@ -162,13 +162,13 @@ def save_report(report, report_date, use_s3=False, bucketName=S3_BUCKET, **kwarg
 
     if src_pos and use_s3:
         try:
-            bucket = s3_resource.Bucket(bucketName)
+            bucket = s3_resource.Bucket(bucket_name)
         except ClientError as e:
             response = get_error_resp(e)
             bucket = None
 
         try:
-            head = s3_client.head_object(Bucket=bucketName, Key=filename)
+            head = s3_client.head_object(Bucket=bucket_name, Key=filename)
         except ClientError:
             etag = ""
         else:
@@ -196,7 +196,7 @@ def save_report(report, report_date, use_s3=False, bucketName=S3_BUCKET, **kwarg
                 status_code = 304 if not_modified else 500
                 response = get_error_resp(e, status_code)
             else:
-                head = s3_client.head_object(Bucket=bucketName, Key=filename)
+                head = s3_client.head_object(Bucket=bucket_name, Key=filename)
                 meta = head["ResponseMetadata"]
 
                 response = {
