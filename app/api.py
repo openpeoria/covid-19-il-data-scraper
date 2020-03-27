@@ -58,7 +58,6 @@ from app.connection import conn
 # https://oauth-pythonclient.readthedocs.io/en/latest/index.html
 q = Queue(connection=conn)
 blueprint = Blueprint("API", __name__)
-headers = {"Accept": "application/json"}
 fake = Faker()
 
 try:
