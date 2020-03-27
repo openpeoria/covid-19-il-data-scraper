@@ -1,0 +1,17 @@
+Faker==1.0.7
+Flask==1.1.1
+Flask-Caching==1.6.0
+Flask-Compress==1.4.0
+Flask-Cors==3.0.8
+Flask-Script==2.0.6
+flask-talisman==0.7.0
+meza>=0.41.1,<0.42.0
+Mezmorize==0.27.0
+riko>=0.61.1,<1.0.0
+pygogo<0.13.0,>=0.12.0
+pkutils>=0.13.6,<0.20.0
+manage.py==0.2.10
+Werkzeug<1.0.0
+pylibmc==1.5.2
+rq-dashboard==0.6.1
+boto3==1.12.30
