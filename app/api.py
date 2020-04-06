@@ -16,7 +16,7 @@ from json.decoder import JSONDecodeError
 from urllib.parse import parse_qsl, urlparse
 from io import BytesIO
 from shutil import copyfileobj
-from datetime import date, timedelta
+from datetime import datetime as dt, date, timedelta
 
 import requests
 import boto3
@@ -43,7 +43,7 @@ from app import cache
 from app.utils import (
     responsify,
     jsonify,
-    parse,
+    parse_kwargs,
     cache_header,
     make_cache_key,
     uncache_header,
@@ -83,9 +83,10 @@ HEADERS = {"Accept": "application/json"}
 ROUTE_TIMEOUT = Config.ROUTE_TIMEOUT
 SET_TIMEOUT = Config.SET_TIMEOUT
 LRU_CACHE_SIZE = Config.LRU_CACHE_SIZE
-KEY_WHITELIST = Config.KEY_WHITELIST
 BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
+DATE_FORMAT = Config.DATE_FORMAT
+DAYS = Config.DAYS
 
 JOB_STATUSES = {
     "deferred": 202,
@@ -260,7 +261,22 @@ def fetch_report(report_date, enqueue=False, **kwargs):
         response = enqueue_work(report_date, **kwargs)
     else:
         report = get_report(report_date, **kwargs)
-        response = save_report(report, report_date, **kwargs)
+        json = save_report(report, report_date, **kwargs)
+        response = {
+            "message": json.get("message"),
+            "result": {
+                "content_length": json.get("content_length"),
+                "last_modified": json.get("last_modified"),
+                "etag": json.get("etag"),
+                "content_length": json.get("content_length"),
+            },
+        }
+
+        if "ok" in json:
+            response["ok"] = json["ok"]
+
+        if json.get("status_code"):
+            response["status_code"] = json["status_code"]
 
     return response
 
@@ -313,23 +329,32 @@ def result(job_id):
 # METHODVIEW ROUTES
 ###########################################################################
 class Report(MethodView):
-    def parse_kwargs(self):
-        kwargs = {k: parse(v) for k, v in request.args.to_dict().items()}
+    def __init__(self):
+        """ Reports
 
-        with app.app_context():
-            for k, v in app.config.items():
-                if k in KEY_WHITELIST:
-                    kwargs.setdefault(k.lower(), v)
-
-        return kwargs
+        Kwargs:
+            date (str): Date of the report to save.
+        """
+        self.kwargs = parse_kwargs(app)
+        end = self.kwargs.get("end", date.today().strftime(DATE_FORMAT))
+        self.end_date = dt.strptime(end, DATE_FORMAT)
+        self.days = self.kwargs.get("days", DAYS)
 
     def post(self):
         """ Saves new reports
-
-        Args:
-            arg (str): Package id of the package to update.
         """
-        response = fetch_report(date, **self.kwargs)
+        result = {}
+
+        for day in range(self.days):
+            start_date = self.end_date - timedelta(days=day)
+            report_date = start_date.strftime(S3_DATE_FORMAT)
+            response = fetch_report(report_date, **self.kwargs)
+            json = response.get("result")
+
+            if json:
+                result[report_date] = json
+
+        response["result"] = result
         return jsonify(**response)
 
     def get(self):

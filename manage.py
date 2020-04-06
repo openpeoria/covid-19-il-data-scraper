@@ -20,6 +20,7 @@ from app.utils import TODAY, YESTERDAY
 BASEDIR = p.dirname(__file__)
 DEF_PORT = 5000
 DATE_FORMAT = Config.DATE_FORMAT
+DAYS = Config.DAYS
 
 manager = Manager(create_app)
 manager.add_option("-m", "--cfgmode", dest="config_mode", default="Development")
@@ -147,12 +148,12 @@ def require():
     "--days",
     help="the number of historical days to fetch from start",
     type=int,
-    default=7,
+    default=DAYS,
 )
 @manager.option("-s", "--use_s3", help="save to AWS S3", action="store_true")
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
 def fetch_reports(end, days, use_s3, enqueue):
-    """Enqueue work to be done"""
+    """Fetch IDPH reports save to disk"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 

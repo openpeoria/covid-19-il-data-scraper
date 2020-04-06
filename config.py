@@ -84,6 +84,7 @@ class Config(object):
     KEY_WHITELIST = {"CHUNK_SIZE", "ROW_LIMIT", "ERR_LIMIT"}
     BASE_URL = "http://www.dph.illinois.gov/sites/default/files/COVID19"
     DATE_FORMAT = "%Y%m%d"
+    DAYS = 7
 
     # Variables warnings
     REQUIRED_SETTINGS = []

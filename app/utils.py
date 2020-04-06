@@ -23,6 +23,7 @@ from urllib.error import URLError
 
 from meza import fntools as ft, convert as cv
 
+from config import Config
 from app import cache
 
 logger = gogo.Gogo(__name__, monolog=True).logger
@@ -55,6 +56,7 @@ AUTH_ROUTES = {
 
 get_hash = lambda text: md5(str(text).encode(ENCODING)).hexdigest()
 
+KEY_WHITELIST = Config.KEY_WHITELIST
 TODAY = date.today()
 YESTERDAY = TODAY - timedelta(days=1)
 
@@ -374,3 +376,14 @@ def get_links(rules):
     """
     links = gen_links(rules)
     return sorted(links, key=lambda link: link["href"])
+
+
+def parse_kwargs(app):
+    kwargs = {k: parse(v) for k, v in request.args.to_dict().items()}
+
+    with app.app_context():
+        for k, v in app.config.items():
+            if k in KEY_WHITELIST:
+                kwargs.setdefault(k.lower(), v)
+
+    return kwargs
