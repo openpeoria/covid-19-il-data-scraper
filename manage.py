@@ -19,7 +19,7 @@ from app.utils import TODAY, YESTERDAY
 
 BASEDIR = p.dirname(__file__)
 DEF_PORT = 5000
-DATE_FORMAT = Config.DATE_FORMAT
+DATE_FORMAT = Config.S3_DATE_FORMAT
 DAYS = Config.DAYS
 
 manager = Manager(create_app)

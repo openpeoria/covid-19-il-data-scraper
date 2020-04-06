@@ -82,8 +82,9 @@ class Config(object):
     API_URL_PREFIX = "/v1"
     SECRET_KEY = getenv("SECRET_KEY", urandom(24))
     KEY_WHITELIST = {"CHUNK_SIZE", "ROW_LIMIT", "ERR_LIMIT"}
-    BASE_URL = "http://www.dph.illinois.gov/sites/default/files/COVID19"
-    DATE_FORMAT = "%Y%m%d"
+    BASE_URL = "https://www.dph.illinois.gov/sitefiles/COVIDHistoricalTestResults.json?nocache=1"
+    S3_DATE_FORMAT = "%Y%m%d"
+    IDPH_DATE_FORMAT = "%m/%d/%Y"
     DAYS = 7
 
     # Variables warnings

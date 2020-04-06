@@ -85,7 +85,9 @@ SET_TIMEOUT = Config.SET_TIMEOUT
 LRU_CACHE_SIZE = Config.LRU_CACHE_SIZE
 BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
-DATE_FORMAT = Config.DATE_FORMAT
+S3_DATE_FORMAT = Config.S3_DATE_FORMAT
+IDPH_DATE_FORMAT = Config.IDPH_DATE_FORMAT
+
 DAYS = Config.DAYS
 
 JOB_STATUSES = {
@@ -228,13 +230,39 @@ def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwar
 
 def get_report(report_date, **kwargs):
     filename = f"COVID19CountyResults{report_date}.json"
-    url = f"{BASE_URL}/{filename}"
-    r = requests.get(url)
+    r = requests.get(BASE_URL)
 
     try:
-        resp = r.json()
+        json = r.json()
     except JSONDecodeError:
         resp = {}
+    else:
+        requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
+        last_updated = dt(**json["LastUpdateDate"])
+        historical_county_values = json["historical_county"]["values"]
+        test_dates = sorted(v["testDate"] for v in historical_county_values)
+        earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
+
+        if last_updated >= requested_date >= earliest_updated:
+            padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
+            date_key = padded_date_key.lstrip("0").replace("/0", "/")
+            historical_county = {
+                v["testDate"]: v["values"] for v in historical_county_values
+            }
+            historical_state = {
+                v["testDate"]: v for v in json["state_testing_results"]["values"]
+            }
+            county = historical_county.get(date_key, {})
+            state = historical_state.get(date_key, {})
+
+            if requested_date == last_updated:
+                demographics = json["demographics"]
+            else:
+                demographics = {}
+
+            resp = {"county": county, "state": state, "demographics": demographics}
+        else:
+            resp = {}
 
     return resp
 
@@ -336,8 +364,8 @@ class Report(MethodView):
             date (str): Date of the report to save.
         """
         self.kwargs = parse_kwargs(app)
-        end = self.kwargs.get("end", date.today().strftime(DATE_FORMAT))
-        self.end_date = dt.strptime(end, DATE_FORMAT)
+        end = self.kwargs.get("end", date.today().strftime(S3_DATE_FORMAT))
+        self.end_date = dt.strptime(end, S3_DATE_FORMAT)
         self.days = self.kwargs.get("days", DAYS)
 
     def post(self):
