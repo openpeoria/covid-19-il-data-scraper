@@ -332,16 +332,17 @@ def get_rel(href, method, rule):
         rel = get_common_rel(resourceName, method)
 
         # add the method if not common or GET
-        if not rel:
+        if not rel and method == "GET":
             rel = resourceName
-            if method != "GET":
-                rel = f"{rel}_{method.lower()}"
+        elif not rel:
+            rel = f"{resourceName}_{method.lower()}"
 
         # get params and add to rel
         params = get_params(rule)
+
         if params:
             joined_params = "_".join(params)
-            rel = f"{rel}_{joined_params}"
+            rel += f"_{joined_params}"
 
     return rel
 

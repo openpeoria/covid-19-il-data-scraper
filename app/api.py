@@ -200,7 +200,7 @@ def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwar
             else:
                 head = s3_client.head_object(Bucket=bucket_name, Key=filename)
                 meta = head["ResponseMetadata"]
-                headers = meta['HTTPHeaders']
+                headers = meta["HTTPHeaders"]
 
                 response = {
                     "ok": True,
