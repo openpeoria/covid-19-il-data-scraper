@@ -11,7 +11,7 @@ Endpoints:
 """
 import random
 
-from json import dumps
+from json import dumps, load
 from json.decoder import JSONDecodeError
 from urllib.parse import parse_qsl, urlparse
 from io import BytesIO
@@ -228,41 +228,65 @@ def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwar
     return response
 
 
-def get_report(report_date, **kwargs):
-    filename = f"COVID19CountyResults{report_date}.json"
-    r = requests.get(BASE_URL)
+def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
+    f = BytesIO()
+    filename = f"IL_county_COVID19_data_{report_date}.json"
 
     try:
-        json = r.json()
-    except JSONDecodeError:
+        s3_client.download_fileobj(bucket_name, filename, f)
+    except ClientError as e:
         resp = {}
     else:
-        requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
-        last_updated = dt(**json["LastUpdateDate"])
-        historical_county_values = json["historical_county"]["values"]
-        test_dates = sorted(v["testDate"] for v in historical_county_values)
-        earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
+        f.seek(0)
 
-        if last_updated >= requested_date >= earliest_updated:
-            padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
-            date_key = padded_date_key.lstrip("0").replace("/0", "/")
-            historical_county = {
-                v["testDate"]: v["values"] for v in historical_county_values
-            }
-            historical_state = {
-                v["testDate"]: v for v in json["state_testing_results"]["values"]
-            }
-            county = historical_county.get(date_key, {})
-            state = historical_state.get(date_key, {})
-
-            if requested_date == last_updated:
-                demographics = json["demographics"]
-            else:
-                demographics = {}
-
-            resp = {"county": county, "state": state, "demographics": demographics}
-        else:
+        try:
+            resp = load(f)
+        except JSONDecodeError as e:
             resp = {}
+
+    return resp
+
+
+def get_report(report_date, **kwargs):
+    filename = f"COVID19CountyResults{report_date}.json"
+    s3 = kwargs.get("s3")
+
+    if s3:
+        resp = get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs)
+    else:
+        r = requests.get(BASE_URL)
+
+        try:
+            json = r.json()
+        except JSONDecodeError:
+            resp = {}
+        else:
+            requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
+            last_updated = dt(**json["LastUpdateDate"])
+            historical_county_values = json["historical_county"]["values"]
+            test_dates = sorted(v["testDate"] for v in historical_county_values)
+            earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
+
+            if last_updated >= requested_date >= earliest_updated:
+                padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
+                date_key = padded_date_key.lstrip("0").replace("/0", "/")
+                historical_county = {
+                    v["testDate"]: v["values"] for v in historical_county_values
+                }
+                historical_state = {
+                    v["testDate"]: v for v in json["state_testing_results"]["values"]
+                }
+                county = historical_county.get(date_key, {})
+                state = historical_state.get(date_key, {})
+
+                if requested_date == last_updated:
+                    demographics = json["demographics"]
+                else:
+                    demographics = {}
+
+                resp = {"county": county, "state": state, "demographics": demographics}
+            else:
+                resp = {}
 
     return resp
 
@@ -305,6 +329,25 @@ def fetch_report(report_date, enqueue=False, **kwargs):
 
         if json.get("status_code"):
             response["status_code"] = json["status_code"]
+
+    return response
+
+
+def load_report(report_date, enqueue=False, **kwargs):
+    if enqueue:
+        job = q.enqueue(get_report, report_date, s3=True, **kwargs)
+        resp = get_job_result(job)
+        json = resp["result"]
+    else:
+        json = get_report(report_date, s3=True, **kwargs)
+
+    if json:
+        response = {
+            "message": f"Successfully found data for date {report_date}!",
+            "result": json,
+        }
+    else:
+        response = get_error_resp(f"No data found for date {report_date}.")
 
     return response
 
@@ -387,11 +430,19 @@ class Report(MethodView):
 
     def get(self):
         """ Retrieves saved reports
-
-        Args:
-            arg (str): Package id of the package to update.
         """
-        response = retrieve_report(date, **self.kwargs)
+        result = {}
+
+        for day in range(self.days):
+            start_date = self.end_date - timedelta(days=day)
+            report_date = start_date.strftime(S3_DATE_FORMAT)
+            response = load_report(report_date, **self.kwargs)
+            json = response.get("result")
+
+            if json:
+                result[report_date] = json
+
+        response["result"] = result
         return jsonify(**response)
 
 
@@ -427,7 +478,8 @@ method_views = {
         "view": Memoization,
         "param": "string:path",
         "methods": ["GET", "DELETE"],
-    }
+    },
+    "report": {"view": Report, "methods": ["GET", "POST"],},
 }
 
 for name, options in method_views.items():

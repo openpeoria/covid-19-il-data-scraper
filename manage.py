@@ -14,7 +14,7 @@ from flask import current_app as app
 from flask_script import Manager
 from config import Config
 from app import create_app, cache
-from app.api import fetch_report
+from app.api import fetch_report, load_report
 from app.utils import TODAY, YESTERDAY
 
 BASEDIR = p.dirname(__file__)
@@ -161,6 +161,29 @@ def fetch_reports(end, days, use_s3, enqueue):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
             response = fetch_report(report_date, use_s3=use_s3, enqueue=enqueue)
+            logger.debug(response)
+
+
+@manager.option(
+    "-d", "--end", help="the report ending date", default=TODAY.strftime(DATE_FORMAT)
+)
+@manager.option(
+    "-n",
+    "--days",
+    help="the number of historical days to fetch from start",
+    type=int,
+    default=DAYS,
+)
+@manager.option("-e", "--enqueue", help="queue the work", action="store_true")
+def load_reports(end, days, use_s3, enqueue):
+    """Fetch s3 reports return time series"""
+    with app.app_context():
+        end_date = dt.strptime(end, DATE_FORMAT)
+
+        for day in range(days):
+            start_date = end_date - timedelta(days=day)
+            report_date = start_date.strftime(DATE_FORMAT)
+            response = load_report(report_date, enqueue=enqueue)
             logger.debug(response)
 
 
