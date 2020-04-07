@@ -7,4 +7,4 @@ pylint==1.9.1
 pkutils==0.13.6
 python-dotenv>=0.10.3
 setuptools>=38.7.0
-pip>=19.1.1,<20.0.0
+pip>=20.0.0
