@@ -3,7 +3,7 @@
 # vim: sw=4:ts=4:expandtab
 
 """ A script to manage development tasks """
-from os import path as p
+from os import path as p, getenv
 from subprocess import call, check_call, CalledProcessError
 from urllib.parse import urlsplit
 from datetime import datetime as dt, timedelta
@@ -12,9 +12,9 @@ import pygogo as gogo
 
 from flask import current_app as app
 from flask_script import Manager
-from config import Config
+from config import Config, __APP_NAME__, __AUTHOR_EMAIL__
 from app import create_app, cache
-from app.api import fetch_report, load_report
+from app.api import fetch_report, load_report, get_status
 from app.utils import TODAY, YESTERDAY
 
 BASEDIR = p.dirname(__file__)
@@ -27,20 +27,39 @@ manager.add_option("-m", "--cfgmode", dest="config_mode", default="Development")
 manager.add_option("-f", "--cfgfile", dest="config_file", type=p.abspath)
 manager.main = manager.run  # Needed to do `manage <command>` from the cli
 
-logger = gogo.Gogo(__name__, monolog=True).logger
-get_logger = lambda ok: logger.info if ok else logger.error
+hdlr_kwargs = {
+    "subject": f"{__APP_NAME__} notification",
+    "recipients": [__AUTHOR_EMAIL__],
+}
+
+if getenv("MAILGUN_SMTP_PASSWORD"):
+    # NOTE: Sandbox domains are restricted to authorized recipients only.
+    def_username = f"postmaster@{getenv('MAILGUN_DOMAIN')}"
+    mailgun_kwargs = {
+        "host": getenv("MAILGUN_SMTP_SERVER", "smtp.mailgun.org"),
+        "port": getenv("MAILGUN_SMTP_PORT", 587),
+        "sender": f"notifications@{getenv('MAILGUN_DOMAIN')}",
+        "username": getenv("MAILGUN_SMTP_LOGIN", def_username),
+        "password": getenv("MAILGUN_SMTP_PASSWORD"),
+    }
+
+    hdlr_kwargs.update(mailgun_kwargs)
+
+high_hdlr = gogo.handlers.email_hdlr(**hdlr_kwargs)
+logger = gogo.Gogo(__name__, high_hdlr=high_hdlr).logger
 
 
-def log_resp(r, prefix):
-    msg = r.json().get("message")
-    message = "{}{}".format(prefix, msg) if prefix else msg
+def log(message=None, ok=True, r=None, **kwargs):
+    if r:
+        try:
+            message = r.json().get("message")
+        except JSONDecodeError:
+            message = r.text
 
-    if message:
-        get_logger(r.ok)(message)
-
-
-def notify_or_log(ok, message):
-    get_logger(ok)(message)
+    if message and ok:
+        logger.info(message)
+    elif message:
+        logger.error(message)
 
 
 @manager.option("-h", "--host", help="The server host")
@@ -185,6 +204,14 @@ def load_reports(end, days, use_s3, enqueue):
             report_date = start_date.strftime(DATE_FORMAT)
             response = load_report(report_date, enqueue=enqueue)
             logger.debug(response)
+
+
+@manager.option("-s", "--use_s3", help="save to AWS S3", action="store_true")
+def status(use_s3):
+    """Fetch IDPH reports save to disk"""
+    with app.app_context():
+        response = get_status(use_s3=use_s3)
+        log(**response)
 
 
 @manager.command

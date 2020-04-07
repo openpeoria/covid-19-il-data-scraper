@@ -19,6 +19,7 @@ from shutil import copyfileobj
 from datetime import datetime as dt, date, timedelta
 
 import requests
+import inflect
 import boto3
 import pygogo as gogo
 
@@ -57,6 +58,7 @@ from app.connection import conn
 # https://requests-oauthlib.readthedocs.io/en/latest/index.html
 # https://oauth-pythonclient.readthedocs.io/en/latest/index.html
 q = Queue(connection=conn)
+p = inflect.engine()
 blueprint = Blueprint("API", __name__)
 fake = Faker()
 
@@ -102,6 +104,19 @@ JOB_STATUSES = {
 
 def _clear_cache():
     cache.delete(f"GET:{PREFIX}/data")
+
+
+def _get_last_update_date(use_s3=True, bucket_name=S3_BUCKET, **kwargs):
+    if use_s3:
+        bucket = s3_resource.Bucket(bucket_name)
+        file_names = sorted(s3_obj.key for s3_obj in bucket.objects.all())
+        newest_file_name = file_names[-1]
+        newest_date = newest_file_name.split("_")[-1].split(".")[0]
+        last_updated = dt.strptime(newest_date, S3_DATE_FORMAT)
+    else:
+        last_updated = None
+
+    return last_updated
 
 
 def get_job_result(job):
@@ -351,6 +366,26 @@ def load_report(report_date, enqueue=False, **kwargs):
     return response
 
 
+def get_status(use_s3=True, **kwargs):
+    if use_s3:
+        _last_updated = _get_last_update_date(use_s3=use_s3)
+        last_updated = _last_updated.strftime("%A %b %d, %Y")
+        dataset_age = (dt.today() - _last_updated).days
+        status_code = 200 if dataset_age < 2 else 500
+        days = p.plural("day", dataset_age)
+
+        response = {
+            "ok": True,
+            "message": f"Last updated on {last_updated} ({dataset_age} {days} ago).",
+            "result": {"last_updated": last_updated, "dataset_age": dataset_age,},
+            "status_code": status_code,
+        }
+    else:
+        response = {"ok": False, "message": "Not implemented!", "status_code": 501}
+
+    return response
+
+
 ###########################################################################
 # ROUTES
 ###########################################################################
@@ -368,6 +403,16 @@ def home():
         "links": get_links(app.url_map.iter_rules()),
     }
 
+    return jsonify(**response)
+
+
+@blueprint.route(f"{PREFIX}/status")
+def status():
+    kwargs = parse_kwargs(app)
+    use_s3 = kwargs.get("source", "s3") == "s3"
+    response = get_status(use_s3=use_s3)
+    response["description"] = "Displays the status of the s3 bucket"
+    response["links"] = get_links(app.url_map.iter_rules())
     return jsonify(**response)
 
 
