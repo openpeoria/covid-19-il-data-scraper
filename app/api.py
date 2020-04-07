@@ -247,11 +247,10 @@ def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     return resp
 
 
-def get_report(report_date, **kwargs):
-    filename = f"COVID19CountyResults{report_date}.json"
-    s3 = kwargs.get("s3")
+def get_report(report_date, use_s3=False, **kwargs):
+    filename = f"IL_county_COVID19_data_{report_date}.json"
 
-    if s3:
+    if use_s3:
         resp = get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs)
     else:
         r = requests.get(BASE_URL)
@@ -335,11 +334,11 @@ def fetch_report(report_date, enqueue=False, **kwargs):
 
 def load_report(report_date, enqueue=False, **kwargs):
     if enqueue:
-        job = q.enqueue(get_report, report_date, s3=True, **kwargs)
+        job = q.enqueue(get_report, report_date, use_s3=True, **kwargs)
         resp = get_job_result(job)
         json = resp["result"]
     else:
-        json = get_report(report_date, s3=True, **kwargs)
+        json = get_report(report_date, use_s3=True, **kwargs)
 
     if json:
         response = {
