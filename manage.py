@@ -195,8 +195,8 @@ def fetch_reports(end, days, enqueue, **kwargs):
     default=DAYS,
 )
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
-def load_reports(end, days, use_s3, enqueue):
-    """Fetch s3 reports return time series"""
+def load_reports(end, days, enqueue):
+    """Fetch s3 reports to return time series"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 
