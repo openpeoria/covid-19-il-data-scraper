@@ -262,45 +262,49 @@ def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     return resp
 
 
-def get_report(report_date, use_s3=False, **kwargs):
-    filename = f"IL_county_COVID19_data_{report_date}.json"
+def get_idph_report(report_date, **kwargs):
+    r = requests.get(BASE_URL)
 
+    try:
+        json = r.json()
+    except JSONDecodeError:
+        resp = {}
+    else:
+        requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
+        last_updated = dt(**json["LastUpdateDate"])
+        historical_county_values = json["historical_county"]["values"]
+        test_dates = sorted(v["testDate"] for v in historical_county_values)
+        earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
+
+        if last_updated >= requested_date >= earliest_updated:
+            padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
+            date_key = padded_date_key.lstrip("0").replace("/0", "/")
+            historical_county = {
+                v["testDate"]: v["values"] for v in historical_county_values
+            }
+            historical_state = {
+                v["testDate"]: v for v in json["state_testing_results"]["values"]
+            }
+            county = historical_county.get(date_key, {})
+            state = historical_state.get(date_key, {})
+
+            if requested_date == last_updated:
+                demographics = json["demographics"]
+            else:
+                demographics = {}
+
+            resp = {"county": county, "state": state, "demographics": demographics}
+        else:
+            resp = {}
+
+    return resp
+
+
+def get_report(report_date, use_s3=False, **kwargs):
     if use_s3:
         resp = get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs)
     else:
-        r = requests.get(BASE_URL)
-
-        try:
-            json = r.json()
-        except JSONDecodeError:
-            resp = {}
-        else:
-            requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
-            last_updated = dt(**json["LastUpdateDate"])
-            historical_county_values = json["historical_county"]["values"]
-            test_dates = sorted(v["testDate"] for v in historical_county_values)
-            earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
-
-            if last_updated >= requested_date >= earliest_updated:
-                padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
-                date_key = padded_date_key.lstrip("0").replace("/0", "/")
-                historical_county = {
-                    v["testDate"]: v["values"] for v in historical_county_values
-                }
-                historical_state = {
-                    v["testDate"]: v for v in json["state_testing_results"]["values"]
-                }
-                county = historical_county.get(date_key, {})
-                state = historical_state.get(date_key, {})
-
-                if requested_date == last_updated:
-                    demographics = json["demographics"]
-                else:
-                    demographics = {}
-
-                resp = {"county": county, "state": state, "demographics": demographics}
-            else:
-                resp = {}
+        resp = get_idph_report(report_date, **kwargs)
 
     return resp
 
