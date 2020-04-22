@@ -326,8 +326,12 @@ def fetch_report(report_date, enqueue=False, **kwargs):
     if enqueue:
         response = enqueue_work(report_date, **kwargs)
     else:
-        report = get_report(report_date, **kwargs)
-        json = save_report(report, report_date, **kwargs)
+        get_from_s3 = kwargs.get("source") == "s3"
+        save_to_s3 = kwargs.get("dest") == "s3"
+
+        report = get_report(report_date, use_s3=get_from_s3, **kwargs)
+        json = save_report(report, report_date, use_s3=save_to_s3, **kwargs)
+
         response = {
             "message": json.get("message"),
             "result": {

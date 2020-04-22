@@ -169,17 +169,18 @@ def require():
     type=int,
     default=DAYS,
 )
-@manager.option("-s", "--use_s3", help="save to AWS S3", action="store_true")
+@manager.option("-s", "--source", help="source data location", default="idph", choices=["idph", "s3"])
+@manager.option("-t", "--dest", help="dest file location", default="local", choices=["local", "s3"])
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
-def fetch_reports(end, days, use_s3, enqueue):
-    """Fetch IDPH reports save to disk"""
+def fetch_reports(end, days, enqueue, **kwargs):
+    """Fetch IDPH reports and save to disk"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 
         for day in range(days):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
-            response = fetch_report(report_date, use_s3=use_s3, enqueue=enqueue)
+            response = fetch_report(report_date, enqueue=enqueue, **kwargs)
             logger.debug(response)
 
 
