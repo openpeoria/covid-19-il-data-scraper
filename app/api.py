@@ -108,11 +108,16 @@ def _clear_cache():
 
 
 def _get_last_update_date(use_s3=True, bucket_name=S3_BUCKET, **kwargs):
+    report_type = kwargs["report_type"]
+    config = REPORT_CONFIGS[report_type]
+    prefix = config["filename"].split("{}")[0]
+
     if use_s3:
         bucket = s3_resource.Bucket(bucket_name)
-        file_names = sorted(s3_obj.key for s3_obj in bucket.objects.all())
-        newest_file_name = file_names[-1]
-        newest_date = newest_file_name.split("_")[-1].split(".")[0]
+        objs = bucket.objects.filter(Prefix=prefix)
+        filenames = sorted(s3_obj.key for s3_obj in objs)
+        newest_filename = filenames[-1]
+        newest_date = newest_filename.split("_")[-1].split(".")[0]
         last_updated = dt.strptime(newest_date, S3_DATE_FORMAT)
     else:
         last_updated = None
@@ -467,7 +472,7 @@ def load_report(report_date, enqueue=False, **kwargs):
 
 def get_status(use_s3=True, **kwargs):
     if use_s3:
-        _last_updated = _get_last_update_date(use_s3=use_s3)
+        _last_updated = _get_last_update_date(use_s3=use_s3, **kwargs)
         last_updated = _last_updated.strftime("%A %b %d, %Y")
         dataset_age = (dt.today() - _last_updated).days
         status_code = 200 if dataset_age < 2 else 500

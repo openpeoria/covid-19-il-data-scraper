@@ -222,11 +222,21 @@ def load_reports(end, days, enqueue):
             logger.debug(response)
 
 
-@manager.option("-s", "--use_s3", help="save to AWS S3", action="store_true")
-def status(use_s3):
+@manager.option(
+    "-s", "--source", help="status location", default="local", choices=["local", "s3"]
+)
+@manager.option(
+    "-r",
+    "--report-type",
+    help="report type",
+    default="county",
+    choices=["county", "zip", "hospital"],
+)
+def status(source, **kwargs):
     """Fetch IDPH reports save to disk"""
     with app.app_context():
-        response = get_status(use_s3=use_s3)
+        use_s3 = source == "s3"
+        response = get_status(use_s3=use_s3, **kwargs)
         log(**response)
 
 
