@@ -169,8 +169,23 @@ def require():
     type=int,
     default=DAYS,
 )
-@manager.option("-s", "--source", help="source data location", default="idph", choices=["idph", "s3"])
-@manager.option("-t", "--dest", help="dest file location", default="local", choices=["local", "s3"])
+@manager.option(
+    "-s",
+    "--source",
+    help="source data location",
+    default="idph",
+    choices=["idph", "s3"],
+)
+@manager.option(
+    "-t", "--dest", help="dest file location", default="local", choices=["local", "s3"]
+)
+@manager.option(
+    "-r",
+    "--report-type",
+    help="report type",
+    default="county",
+    choices=["county", "zip", "hospital"],
+)
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
 def fetch_reports(end, days, enqueue, **kwargs):
     """Fetch IDPH reports and save to disk"""

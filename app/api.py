@@ -13,6 +13,7 @@ import random
 
 from json import dumps, load
 from json.decoder import JSONDecodeError
+from functools import partial
 from urllib.parse import parse_qsl, urlparse
 from io import BytesIO
 from shutil import copyfileobj
@@ -88,7 +89,7 @@ LRU_CACHE_SIZE = Config.LRU_CACHE_SIZE
 BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
 S3_DATE_FORMAT = Config.S3_DATE_FORMAT
-IDPH_DATE_FORMAT = Config.IDPH_DATE_FORMAT
+REPORT_CONFIGS = Config.REPORT_CONFIGS
 
 DAYS = Config.DAYS
 
@@ -159,93 +160,88 @@ def get_error_resp(e, status_code=500):
     }
 
 
-def save_report(report, report_date, use_s3=False, bucket_name=S3_BUCKET, **kwargs):
-    filename = f"IL_county_COVID19_data_{report_date}.json"
-    options = {"indent": 2, "sort_keys": True, "ensure_ascii": False}
-    src = BytesIO()
+def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
+    report_type = kwargs["report_type"]
+    config = REPORT_CONFIGS[report_type]
+    filename = config["filename"].format(report_date)
 
-    if report:
+    try:
+        bucket = s3_resource.Bucket(bucket_name)
+    except ClientError as e:
+        response = get_error_resp(e)
+        bucket = None
+
+    try:
+        head = s3_client.head_object(Bucket=bucket_name, Key=filename)
+    except ClientError:
+        etag = ""
+    else:
+        etag = head.get("ETag", "").strip('"')
+
+    try:
+        s3_obj = bucket.Object(filename)
+    except ClientError as e:
+        response = get_error_resp(e)
+        s3_obj = None
+    except AttributeError:
+        s3_obj = None
+
+    try:
+        s3_obj.upload_fileobj(src)
+    except ClientError as e:
+        response = get_error_resp(e)
+    except AttributeError:
+        pass
+    else:
         try:
-            data = dumps(report, **options)
+            s3_obj.wait_until_exists(IfNoneMatch=etag)
+        except WaiterError as e:
+            not_modified = "Not Modified" in str(e)
+            status_code = 304 if not_modified else 500
+            response = get_error_resp(e, status_code)
+        else:
+            head = s3_client.head_object(Bucket=bucket_name, Key=filename)
+            meta = head["ResponseMetadata"]
+            headers = meta["HTTPHeaders"]
+
+            response = {
+                "ok": True,
+                "message": f"Successfully saved {filename}!",
+                "last_modified": headers.get("last-modified"),
+                "etag": headers.get("etag", "").strip('"'),
+                "content_length": headers.get("content-length"),
+                "status_code": meta.get("HTTPStatusCode"),
+            }
+
+    return response
+
+
+def save_local_report(src, report_date, report_type=None, **kwargs):
+    config = REPORT_CONFIGS[report_type]
+    filename = config["filename"].format(report_date)
+
+    with open(filename, mode="wb") as dest:
+        try:
+            copyfileobj(src, dest)
         except Exception as e:
             response = get_error_resp(e)
         else:
-            src.write(data.encode("utf-8"))
-    else:
-        response = get_error_resp(f"No data found for {report_date}.", 404)
-
-    src_pos = src.tell()
-    src.seek(0)
-
-    if src_pos and use_s3:
-        try:
-            bucket = s3_resource.Bucket(bucket_name)
-        except ClientError as e:
-            response = get_error_resp(e)
-            bucket = None
-
-        try:
-            head = s3_client.head_object(Bucket=bucket_name, Key=filename)
-        except ClientError:
-            etag = ""
-        else:
-            etag = head.get("ETag", "").strip('"')
-
-        try:
-            s3_obj = bucket.Object(filename)
-        except ClientError as e:
-            response = get_error_resp(e)
-            s3_obj = None
-        except AttributeError:
-            s3_obj = None
-
-        try:
-            s3_obj.upload_fileobj(src)
-        except ClientError as e:
-            response = get_error_resp(e)
-        except AttributeError:
-            pass
-        else:
-            try:
-                s3_obj.wait_until_exists(IfNoneMatch=etag)
-            except WaiterError as e:
-                not_modified = "Not Modified" in str(e)
-                status_code = 304 if not_modified else 500
-                response = get_error_resp(e, status_code)
-            else:
-                head = s3_client.head_object(Bucket=bucket_name, Key=filename)
-                meta = head["ResponseMetadata"]
-                headers = meta["HTTPHeaders"]
-
-                response = {
-                    "ok": True,
-                    "message": f"Successfully saved {filename}!",
-                    "last_modified": headers.get("last-modified"),
-                    "etag": headers.get("etag", "").strip('"'),
-                    "content_length": headers.get("content-length"),
-                    "status_code": meta.get("HTTPStatusCode"),
-                }
-    elif src_pos:
-        with open(filename, mode="wb") as dest:
-            try:
-                copyfileobj(src, dest)
-            except Exception as e:
-                response = get_error_resp(e)
-            else:
-                new_pos = dest.tell()
-                response = {
-                    "ok": bool(new_pos),
-                    "message": f"Wrote {new_pos} bytes to {filename}!",
-                    "content_length": new_pos,
-                    "status_code": 200,
-                }
+            new_pos = dest.tell()
+            response = {
+                "ok": bool(new_pos),
+                "message": f"Wrote {new_pos} bytes to {filename}!",
+                "content_length": new_pos,
+                "status_code": 200,
+            }
 
     return response
 
 
 def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     f = BytesIO()
-    filename = f"IL_county_COVID19_data_{report_date}.json"
+    report_type = kwargs["report_type"]
+    config = REPORT_CONFIGS[report_type]
+    filename = config["filename"].format(report_date)
 
     try:
         s3_client.download_fileobj(bucket_name, filename, f)
@@ -262,8 +258,87 @@ def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     return resp
 
 
+def parse_idph_county_report(requested_date, last_updated, **json):
+    config = REPORT_CONFIGS["county"]
+    date_format = config["date_format"]
+
+    historical_county_values = json["historical_county"]["values"]
+    test_dates = sorted(v["testDate"] for v in historical_county_values)
+    earliest_updated = dt.strptime(test_dates[0], date_format)
+
+    if last_updated >= requested_date >= earliest_updated:
+        padded_date_key = requested_date.strftime(date_format)
+        date_key = padded_date_key.lstrip("0").replace("/0", "/")
+        historical_county = {
+            v["testDate"]: v["values"] for v in historical_county_values
+        }
+        historical_state = {
+            v["testDate"]: v for v in json["state_testing_results"]["values"]
+        }
+        county = historical_county.get(date_key, {})
+        state = historical_state.get(date_key, {})
+
+        if requested_date == last_updated:
+            demographics = json["demographics"]
+        else:
+            demographics = {}
+
+        resp = {"county": county, "state": state, "demographics": demographics}
+    else:
+        resp = {}
+
+    return resp
+
+
+def parse_idph_hospital_report(requested_date, last_updated, **json):
+    config = REPORT_CONFIGS["hospital"]
+    date_format = config["date_format"]
+
+    historical_hospital_values = json["HospitalUtilizationResults"]
+    report_dates = sorted(v["reportDate"] for v in historical_hospital_values)
+    earliest_updated = dt.strptime(report_dates[0], date_format)
+    date_key = requested_date.strftime(date_format)
+
+    if last_updated >= requested_date >= earliest_updated:
+        if requested_date == last_updated:
+            state = json["statewideValues"]
+            state["reportDate"] = date_key
+            region = json["regionValues"]
+        else:
+            historical_hospital = {
+                v["reportDate"]: v for v in historical_hospital_values
+            }
+            state = historical_hospital.get(date_key, {})
+            region = {}
+
+        resp = {"state": state, "region": region}
+    else:
+        resp = {}
+
+    return resp
+
+
+def parse_idph_zip_report(requested_date, last_updated, **json):
+    if last_updated == requested_date:
+        resp = {"zipcodes": json["zip_values"]}
+    else:
+        resp = {}
+
+    return resp
+
+
+PARSERS = {
+    "county": parse_idph_county_report,
+    "zip": parse_idph_zip_report,
+    "hospital": parse_idph_hospital_report,
+}
+
+
 def get_idph_report(report_date, **kwargs):
-    r = requests.get(BASE_URL)
+    report_type = kwargs["report_type"]
+    config = REPORT_CONFIGS[report_type]
+    report_name = config["report_name"]
+    r = requests.get(BASE_URL.format(report_name))
 
     try:
         json = r.json()
@@ -272,41 +347,57 @@ def get_idph_report(report_date, **kwargs):
     else:
         requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
         last_updated = dt(**json["LastUpdateDate"])
-        historical_county_values = json["historical_county"]["values"]
-        test_dates = sorted(v["testDate"] for v in historical_county_values)
-        earliest_updated = dt.strptime(test_dates[0], IDPH_DATE_FORMAT)
+        parse = PARSERS[report_type]
+        resp = parse(requested_date, last_updated, **json)
 
-        if last_updated >= requested_date >= earliest_updated:
-            padded_date_key = requested_date.strftime(IDPH_DATE_FORMAT)
-            date_key = padded_date_key.lstrip("0").replace("/0", "/")
-            historical_county = {
-                v["testDate"]: v["values"] for v in historical_county_values
-            }
-            historical_state = {
-                v["testDate"]: v for v in json["state_testing_results"]["values"]
-            }
-            county = historical_county.get(date_key, {})
-            state = historical_state.get(date_key, {})
+    return resp
 
-            if requested_date == last_updated:
-                demographics = json["demographics"]
-            else:
-                demographics = {}
 
-            resp = {"county": county, "state": state, "demographics": demographics}
+REPORT_FUNCS = {
+    (True, "get", "county"): partial(get_3s_report, report_type="county"),
+    (True, "get", "zip"): partial(get_3s_report, report_type="zip"),
+    (True, "get", "hospital"): partial(get_3s_report, report_type="hospital"),
+    (False, "get", "county"): partial(get_idph_report, report_type="county"),
+    (False, "get", "zip"): partial(get_idph_report, report_type="zip"),
+    (False, "get", "hospital"): partial(get_idph_report, report_type="hospital"),
+    (True, "save", "county"): partial(save_3s_report, report_type="county"),
+    (True, "save", "zip"): partial(save_3s_report, report_type="zip"),
+    (True, "save", "hospital"): partial(save_3s_report, report_type="hospital"),
+    (False, "save", "county"): partial(save_local_report, report_type="county"),
+    (False, "save", "zip"): partial(save_local_report, report_type="zip"),
+    (False, "save", "hospital"): partial(save_local_report, report_type="hospital"),
+}
+
+
+def get_report(report_date, report_type="county", use_s3=False, **kwargs):
+    report_func = REPORT_FUNCS[(use_s3, "get", report_type)]
+    return report_func(report_date, **kwargs)
+
+
+def save_report(report, report_date, report_type="county", use_s3=False, **kwargs):
+    src = BytesIO()
+
+    if report:
+        options = {"indent": 2, "sort_keys": True, "ensure_ascii": False}
+
+        try:
+            data = dumps(report, **options)
+        except Exception as e:
+            response = get_error_resp(e)
         else:
-            resp = {}
-
-    return resp
-
-
-def get_report(report_date, use_s3=False, **kwargs):
-    if use_s3:
-        resp = get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs)
+            response = get_error_resp(f"No data written for {report_date}.", 404)
+            src.write(data.encode("utf-8"))
     else:
-        resp = get_idph_report(report_date, **kwargs)
+        response = get_error_resp(f"No data found for {report_date}.", 404)
 
-    return resp
+    src_pos = src.tell()
+    src.seek(0)
+
+    if src_pos:
+        report_func = REPORT_FUNCS[(use_s3, "save", report_type)]
+        response = report_func(src, report_date, **kwargs)
+
+    return response
 
 
 def save_report_by_id(job_id, report_date, **kwargs):

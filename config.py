@@ -82,9 +82,21 @@ class Config(object):
     API_URL_PREFIX = "/v1"
     SECRET_KEY = getenv("SECRET_KEY", urandom(24))
     KEY_WHITELIST = {"CHUNK_SIZE", "ROW_LIMIT", "ERR_LIMIT"}
-    BASE_URL = "https://www.dph.illinois.gov/sitefiles/COVIDHistoricalTestResults.json?nocache=1"
+    BASE_URL = "https://www.dph.illinois.gov/sitefiles/{}.json?nocache=1"
+    REPORT_CONFIGS = {
+        "county": {
+            "report_name": "COVIDHistoricalTestResults",
+            "filename": "IL_county_COVID19_data_{}.json",
+            "date_format": "%m/%d/%Y",
+        },
+        "zip": {"report_name": "COVIDZip", "filename": "IL_zip_COVID19_data_{}.json",},
+        "hospital": {
+            "report_name": "COVIDHospitalRegions",
+            "filename": "IL_regional_hospital_data_{}.json",
+            "date_format": "%Y-%m-%d",
+        },
+    }
     S3_DATE_FORMAT = "%Y%m%d"
-    IDPH_DATE_FORMAT = "%m/%d/%Y"
     DAYS = 7
 
     # Variables warnings
