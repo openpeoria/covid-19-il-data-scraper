@@ -379,7 +379,7 @@ def get_status(use_s3=True, **kwargs):
         days = p.plural("day", dataset_age)
 
         response = {
-            "ok": True,
+            "ok": status_code == 200,
             "message": f"Last updated on {last_updated} ({dataset_age} {days} ago).",
             "result": {"last_updated": last_updated, "dataset_age": dataset_age,},
             "status_code": status_code,
