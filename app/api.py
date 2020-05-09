@@ -191,6 +191,10 @@ def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     except AttributeError:
         s3_obj = None
 
+    if etag and not kwargs.get("overwrite"):
+        response = get_error_resp(f"{filename} already exists!")
+        s3_obj = None
+
     try:
         s3_obj.upload_fileobj(src)
     except ClientError as e:
