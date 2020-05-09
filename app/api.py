@@ -481,7 +481,7 @@ def get_status(use_s3=True, **kwargs):
         response = {
             "ok": status_code == 200,
             "message": f"Last updated on {last_updated} ({dataset_age} {days} ago).",
-            "result": {"last_updated": last_updated, "dataset_age": dataset_age,},
+            "result": {"last_updated": last_updated, "dataset_age": dataset_age},
             "status_code": status_code,
         }
     else:
@@ -627,7 +627,7 @@ method_views = {
         "param": "string:path",
         "methods": ["GET", "DELETE"],
     },
-    "report": {"view": Report, "methods": ["GET", "POST"],},
+    "report": {"view": Report, "methods": ["GET", "POST"]},
 }
 
 for name, options in method_views.items():

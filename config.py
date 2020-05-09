@@ -89,7 +89,7 @@ class Config(object):
             "filename": "IL_county_COVID19_data_{}.json",
             "date_format": "%m/%d/%Y",
         },
-        "zip": {"report_name": "COVIDZip", "filename": "IL_zip_COVID19_data_{}.json",},
+        "zip": {"report_name": "COVIDZip", "filename": "IL_zip_COVID19_data_{}.json"},
         "hospital": {
             "report_name": "COVIDHospitalRegions",
             "filename": "IL_regional_hospital_data_{}.json",
