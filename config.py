@@ -25,7 +25,6 @@ from pathlib import Path
 import requests
 import pygogo as gogo
 
-from pkutils import parse_module
 from meza.process import merge
 
 
