@@ -177,7 +177,7 @@ def require():
     choices=["idph", "s3"],
 )
 @manager.option(
-    "-t", "--dest", help="dest file location", default="local", choices=["local", "s3"]
+    "-t", "--dest", help="dest file location", default="local", choices=["local", "ckan", "s3"]
 )
 @manager.option(
     "-r",

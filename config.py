@@ -87,12 +87,18 @@ class Config(object):
             "report_name": "COVIDHistoricalTestResults",
             "filename": "IL_county_COVID19_data_{}.json",
             "date_format": "%m/%d/%Y",
+            "package_id": "il-covid19",
         },
-        "zip": {"report_name": "COVIDZip", "filename": "IL_zip_COVID19_data_{}.json"},
+        "zip": {
+            "report_name": "COVIDZip",
+            "filename": "IL_zip_COVID19_data_{}.json",
+            "package_id": "illinois-covid19-cases-zip",
+        },
         "hospital": {
             "report_name": "COVIDHospitalRegions",
             "filename": "IL_regional_hospital_data_{}.json",
             "date_format": "%Y-%m-%d",
+            "package_id": "illinois-regional-hospital-data",
         },
     }
     S3_DATE_FORMAT = "%Y%m%d"
@@ -130,6 +136,10 @@ class Config(object):
     CHUNK_SIZE = 256
     ROW_LIMIT = 32
     OAUTHLIB_INSECURE_TRANSPORT = False
+
+    # CKAN
+    CKAN_API_KEY= getenv("CKAN_API_KEY")
+    CKAN_API_BASE_URL = 'https://openpeoria.nerevu.com/api/3/action'
 
 
 class Production(Config):
