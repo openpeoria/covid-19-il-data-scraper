@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 """ app.api
 ~~~~~~~~~~~~
-Provides endpoints for authenticating with and pulling data from quickbooks.
 
 Live Site:
-    https://alegna-api.nerevu.com/v1
 
 Endpoints:
-    Visit the live site for a list of all available endpoints
 """
 import random
 
@@ -90,6 +87,8 @@ BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
 S3_DATE_FORMAT = Config.S3_DATE_FORMAT
 REPORT_CONFIGS = Config.REPORT_CONFIGS
+CKAN_API_KEY = Config.CKAN_API_KEY
+CKAN_API_BASE_URL = Config.CKAN_API_BASE_URL
 
 DAYS = Config.DAYS
 
@@ -163,6 +162,70 @@ def get_error_resp(e, status_code=500):
         "message": str(e),
         "status_code": status_code,
     }
+
+
+def save_ckan_report(src, report_date, **kwargs):
+    report_type = kwargs["report_type"]
+    config = REPORT_CONFIGS[report_type]
+    filename = config["filename"].format(report_date)
+    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
+    response = None
+
+    # check for data before uploading it
+    r = requests.post(
+        # resource_search by name matches any files that have
+        # the {filename} in the file name (not an exact match)
+        f"{CKAN_API_BASE_URL}/resource_search",
+        data={"query": f"name:{filename}"},
+        headers=headers,
+    )
+    json = r.json()
+
+    action = 'updated' if json['result']['count'] else 'created'
+    overwrite = kwargs.get('overwrite')
+    is_update = action == 'updated'
+
+    if overwrite and is_update:
+        # setup post_data for updating new resource
+        post_data = {
+            "url": CKAN_API_BASE_URL + '/resource_update',
+            "data": {"id": json['result']['results'][0]['id']}
+        }
+    elif is_update:
+        response = get_error_resp(f"{filename} already exists!")
+    else:
+        # setup post_data for creating new resource
+        # (https://docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create)
+        post_data = {
+            "url": CKAN_API_BASE_URL + '/resource_create',
+            "data": {
+                "package_id": config["package_id"],
+                "mimetype": "application/json",
+                "format": "application/json",
+                "name": filename,
+            },
+            "files": [('upload', src)]
+        }
+
+    if not response:
+        # upload data
+        post_data['headers'] = headers
+        r = requests.post(**post_data)
+        json = r.json()
+        if r.ok:
+            response = {
+                "ok": True,
+                "message": f"Successfully {action} {filename}!",
+                "last_modified": json['result'].get("last_modified"),
+                # TODO: should I use name here?
+                "etag": json['result'].get("name", "").strip('"'),
+                "content_length": json['result'].get("content_length"),
+                "status_code": r.status_code,
+            }
+        else:
+            response = get_error_resp(json)
+
+    return response
 
 
 def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
@@ -369,12 +432,15 @@ REPORT_FUNCS = {
     (False, "get", "county"): partial(get_idph_report, report_type="county"),
     (False, "get", "zip"): partial(get_idph_report, report_type="zip"),
     (False, "get", "hospital"): partial(get_idph_report, report_type="hospital"),
-    (True, "save", "county"): partial(save_3s_report, report_type="county"),
-    (True, "save", "zip"): partial(save_3s_report, report_type="zip"),
-    (True, "save", "hospital"): partial(save_3s_report, report_type="hospital"),
-    (False, "save", "county"): partial(save_local_report, report_type="county"),
-    (False, "save", "zip"): partial(save_local_report, report_type="zip"),
-    (False, "save", "hospital"): partial(save_local_report, report_type="hospital"),
+    ('s3', "save", "county"): partial(save_3s_report, report_type="county"),
+    ('s3', "save", "zip"): partial(save_3s_report, report_type="zip"),
+    ('s3', "save", "hospital"): partial(save_3s_report, report_type="hospital"),
+    ('local', "save", "county"): partial(save_local_report, report_type="county"),
+    ('local', "save", "zip"): partial(save_local_report, report_type="zip"),
+    ('local', "save", "hospital"): partial(save_local_report, report_type="hospital"),
+    ('ckan', "save", "county"): partial(save_ckan_report, report_type="county"),
+    ('ckan', "save", "zip"): partial(save_ckan_report, report_type="zip"),
+    ('ckan', "save", "hospital"): partial(save_ckan_report, report_type="hospital"),
 }
 
 
@@ -383,7 +449,7 @@ def get_report(report_date, report_type="county", use_s3=False, **kwargs):
     return report_func(report_date, **kwargs)
 
 
-def save_report(report, report_date, report_type="county", use_s3=False, **kwargs):
+def save_report(report, report_date, report_type="county", **kwargs):
     src = BytesIO()
 
     if report:
@@ -403,7 +469,9 @@ def save_report(report, report_date, report_type="county", use_s3=False, **kwarg
     src.seek(0)
 
     if src_pos:
-        report_func = REPORT_FUNCS[(use_s3, "save", report_type)]
+        dest = kwargs.get('dest', 'local')
+        src = data if dest == 'ckan' else src
+        report_func = REPORT_FUNCS[(dest, "save", report_type)]
         response = report_func(src, report_date, **kwargs)
 
     return response
@@ -430,11 +498,11 @@ def fetch_report(report_date, enqueue=False, **kwargs):
     if enqueue:
         response = enqueue_work(report_date, **kwargs)
     else:
+        # TODO: Possibly change get_report
         get_from_s3 = kwargs.get("source") == "s3"
-        save_to_s3 = kwargs.get("dest") == "s3"
 
         report = get_report(report_date, use_s3=get_from_s3, **kwargs)
-        json = save_report(report, report_date, use_s3=save_to_s3, **kwargs)
+        json = save_report(report, report_date, **kwargs)
 
         response = {
             "message": json.get("message"),
