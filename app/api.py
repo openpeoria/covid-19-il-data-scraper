@@ -640,10 +640,14 @@ class Report(MethodView):
             start_date = self.end_date - timedelta(days=day)
             report_date = start_date.strftime(S3_DATE_FORMAT)
             response = fetch_report(report_date, **self.kwargs)
-            json = response.get("result")
+
+            # We are using `pop` to allow us to more easily
+            # prevent nesting the results we are returning.
+            # (see PR https://github.com/openpeoria/covid-19-il-data-scraper/pull/2/files#r443675838).
+            json = response.pop('result', {})
 
             if json:
-                result[report_date] = json
+                result[report_date] = {**json, **response}
 
         response["result"] = result
         return jsonify(**response)
