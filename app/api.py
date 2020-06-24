@@ -6,15 +6,16 @@ Live Site:
 
 Endpoints:
 """
-import random
+import random, re
 
-from json import dumps, load
+from json import dumps, load, loads
 from json.decoder import JSONDecodeError
 from functools import partial
 from urllib.parse import parse_qsl, urlparse
 from io import BytesIO
 from shutil import copyfileobj
 from datetime import datetime as dt, date, timedelta
+from collections import OrderedDict
 
 import requests
 import inflect
@@ -37,6 +38,7 @@ from flask import (
 from flask.views import MethodView
 from rq import Queue
 
+from meza.convert import records2csv
 from config import Config
 from app import cache
 from app.utils import (
@@ -87,6 +89,7 @@ BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
 S3_DATE_FORMAT = Config.S3_DATE_FORMAT
 REPORT_CONFIGS = Config.REPORT_CONFIGS
+COVID_CSV_PATHS = Config.COVID_CSV_PATHS
 CKAN_API_KEY = Config.CKAN_API_KEY
 CKAN_API_BASE_URL = Config.CKAN_API_BASE_URL
 
@@ -164,68 +167,187 @@ def get_error_resp(e, status_code=500):
     }
 
 
+def read_zipcodes(json, path):
+    data = loads(json)
+    records = data['zipcodes']
+    for zips in records:
+        keys_to_remove = []
+        for key in zips['demographics'].keys():
+            if key != path:
+                keys_to_remove.append(key)
+        for key in keys_to_remove:
+            del zips['demographics'][key]
+        print()
+    yield records
+
+
+def flatten(d,sep="_"):
+    obj = OrderedDict()
+
+    for i in d:
+        def recurse(t,parent_key=""):
+            if isinstance(t,list):
+                for j in range(len(t)):
+                    recurse(t[j],parent_key + sep + str(j) if parent_key else str(j))
+            elif isinstance(t,dict):
+                for k,v in t.items():
+                    recurse(v,parent_key + sep + k if parent_key else k)
+            else:
+                obj[parent_key] = t
+
+        if isinstance(i, dict):
+            i = [i]
+        recurse(i)
+
+    yield obj
+
+
+def json2rows(src, path):
+    obj = {}
+    for i in flatten(src, sep='-'):
+        for k,v in i.items():
+            index = "-".join(re.findall(r'\d+', k))
+            split_key = re.split(r'\d+-', k)
+            depth = len(split_key) - 1
+            new_key = "".join(split_key)
+            if new_key not in path['blacklist']:
+                if new_key in path['change']:
+                    new_key = path['change'][new_key]
+                if depth in obj and index in obj[depth]:
+                    obj[depth][index] = {**obj[depth][index], **{new_key: v}}
+                elif depth in obj:
+                    obj[depth][index] = {new_key: v}
+                else:
+                    obj[depth] = {}
+                    obj[depth][index] = {new_key: v}
+
+    for index in obj[max(obj.keys())].keys():
+        accumulator = ''
+        row = {}
+        for pos, num in enumerate(index.split('-')):
+            pos += 1
+            if pos == 1:
+                accumulator += num
+            else:
+                accumulator += '-' + num
+
+            row = {**row, **obj[pos][accumulator]}
+        yield row
+
+
+def read_json(src, path):
+    data = loads(src)
+    # TODO: this could be more resilient
+    for key in path.split('.'):
+        data = data[key]
+    yield data
+
+
+def json2csvs(src, report_type):
+    if isinstance(src, str):
+        paths = COVID_CSV_PATHS[report_type]
+        for path in paths:
+            gen_records = read_zipcodes if report_type == 'zip' else read_json
+            records = gen_records(src, path=path['path'])
+            rows_gen = json2rows(records, path)
+            csv_report = records2csv(rows_gen)
+            yield {
+                'src': csv_report.read(),
+                'filename': f'{report_type}.{path["path"]}'
+            }
+
+
+def prep_for_upload(csvs, base_filename):
+    # TODO: perhaps change the REPORT_CONFIGS filename instead
+    for src in csvs:
+        yield {
+            'src': src['src'],
+            'filename': f"{base_filename.replace('.json', '')}-{src['filename']}.csv",
+            'mimetype': 'text/csv',
+        }
+
+
 def save_ckan_report(src, report_date, **kwargs):
     report_type = kwargs["report_type"]
     config = REPORT_CONFIGS[report_type]
     filename = config["filename"].format(report_date)
     headers = {"X-CKAN-API-Key": CKAN_API_KEY}
-    response = None
+    src_csvs = json2csvs(src, report_type)
+    csv_items = prep_for_upload(src_csvs, filename)
+    json_item = [{
+        'src': src,
+        'filename': filename,
+        'mimetype': 'application/json'
+    }]
+    responses = {}
 
-    # check for data before uploading it
-    r = requests.post(
-        # resource_search by name matches any files that have
-        # the {filename} in the file name (not an exact match)
-        f"{CKAN_API_BASE_URL}/resource_search",
-        data={"query": f"name:{filename}"},
-        headers=headers,
-    )
-    json = r.json()
-
-    action = 'updated' if json['result']['count'] else 'created'
-    overwrite = kwargs.get('overwrite')
-    is_update = action == 'updated'
-
-    if overwrite and is_update:
-        # setup post_data for updating new resource
-        post_data = {
-            "url": CKAN_API_BASE_URL + '/resource_update',
-            "data": {"id": json['result']['results'][0]['id']}
-        }
-    elif is_update:
-        response = get_error_resp(f"{filename} already exists!")
-    else:
-        # setup post_data for creating new resource
-        # (https://docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create)
-        post_data = {
-            "url": CKAN_API_BASE_URL + '/resource_create',
-            "data": {
-                "package_id": config["package_id"],
-                "mimetype": "application/json",
-                "format": "application/json",
-                "name": filename,
-            },
-            "files": [('upload', src)]
-        }
-
-    if not response:
-        # upload data
-        post_data['headers'] = headers
-        r = requests.post(**post_data)
+    # this only works for the first date if the source isn't s3
+    # because the data is less detailed on other days
+    for item in json_item + list(csv_items):
+        # check for data before uploading it
+        response = None
+        r = requests.post(
+            # resource_search by name matches any files that have
+            # the {filename} in the file name (not an exact match)
+            f"{CKAN_API_BASE_URL}/resource_search",
+            data={"query": f"name:{item['filename']}"},
+            headers=headers,
+        )
         json = r.json()
-        if r.ok:
-            response = {
-                "ok": True,
-                "message": f"Successfully {action} {filename}!",
-                "last_modified": json['result'].get("last_modified"),
-                # TODO: should I use name here?
-                "etag": json['result'].get("name", "").strip('"'),
-                "content_length": json['result'].get("content_length"),
-                "status_code": r.status_code,
-            }
-        else:
-            response = get_error_resp(json)
 
-    return response
+        action = 'updated' if json['result']['count'] else 'created'
+        overwrite = kwargs.get('overwrite')
+        is_update = action == 'updated'
+
+        if overwrite and is_update:
+            # setup post_data for updating new resource
+            post_data = {
+                "url": CKAN_API_BASE_URL + '/resource_update',
+                "data": {"id": json['result']['results'][0]['id']}
+            }
+        elif is_update:
+            response = get_error_resp(f"{item['filename']} already exists!")
+        else:
+            # setup post_data for creating new resource
+            # (https://docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create)
+            post_data = {
+                "url": CKAN_API_BASE_URL + '/resource_create',
+                "data": {
+                    "package_id": config["package_id"],
+                    "mimetype": item['mimetype'],
+                    "format": item['mimetype'],
+                    "name": item['filename'],
+                },
+                "files": [('upload', item['src'])]
+            }
+
+        if not response:
+            # upload data
+            post_data['headers'] = headers
+            r = requests.post(**post_data)
+            json = r.json()
+            if r.ok:
+                response = {
+                    "ok": True,
+                    "message": f"Successfully {action} {item['filename']}!",
+                    "last_modified": json['result'].get("last_modified"),
+                    # TODO: should I use name here?
+                    "etag": json['result'].get("name", "").strip('"'),
+                    "content_length": json['result'].get("content_length"),
+                    "status_code": r.status_code,
+                }
+            else:
+                response = get_error_resp(json)
+
+        _filename_chunk = re.search(r'-(.+\.\w+$)', item['filename'])
+        if _filename_chunk:
+            filename_chunk = _filename_chunk[1]
+        else:
+            filename_chunk = f"{report_type}.json"
+
+        responses[filename_chunk] = response
+
+    return responses
 
 
 def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
@@ -502,25 +624,7 @@ def fetch_report(report_date, enqueue=False, **kwargs):
         get_from_s3 = kwargs.get("source") == "s3"
 
         report = get_report(report_date, use_s3=get_from_s3, **kwargs)
-        json = save_report(report, report_date, **kwargs)
-
-        response = {
-            "message": json.get("message"),
-            "result": {
-                "content_length": json.get("content_length"),
-                "last_modified": json.get("last_modified"),
-                "etag": json.get("etag"),
-                "content_length": json.get("content_length"),
-            },
-        }
-
-        if "ok" in json:
-            response["ok"] = json["ok"]
-
-        if json.get("status_code"):
-            response["status_code"] = json["status_code"]
-
-    return response
+        return save_report(report, report_date, **kwargs)
 
 
 def load_report(report_date, enqueue=False, **kwargs):
@@ -639,17 +743,10 @@ class Report(MethodView):
         for day in range(self.days):
             start_date = self.end_date - timedelta(days=day)
             report_date = start_date.strftime(S3_DATE_FORMAT)
-            response = fetch_report(report_date, **self.kwargs)
+            json = fetch_report(report_date, **self.kwargs)
+            result[report_date] = {**json}
 
-            # We are using `pop` to allow us to more easily
-            # prevent nesting the results we are returning.
-            # (see PR https://github.com/openpeoria/covid-19-il-data-scraper/pull/2/files#r443675838).
-            json = response.pop('result', {})
-
-            if json:
-                result[report_date] = {**json, **response}
-
-        response["result"] = result
+        response = {'result': result}
         return jsonify(**response)
 
     def get(self):
