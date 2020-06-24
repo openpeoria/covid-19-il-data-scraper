@@ -101,6 +101,45 @@ class Config(object):
             "package_id": "illinois-regional-hospital-data",
         },
     }
+    COVID_CSV_PATHS = {
+        "county": [
+            { 'path': "county", 'blacklist': [] },
+            {
+                'path': "demographics.age",
+                'blacklist': [
+                    "count",
+                    "tested",
+                    "deaths",
+                    "demographics-race-color",
+                ]
+            },
+            { 'path': "demographics.gender", 'blacklist': [] },
+            { 'path': "demographics.race", 'blacklist': [] },
+            { 'path': "state", 'blacklist': [] },
+        ],
+        "hospital": [
+            { "path": "region", 'blacklist': ["id"] },
+            { "path": "state", 'blacklist': [] }
+        ],
+        "zip": [
+            {
+                'path': "age",
+                'blacklist': [ "confirmed_cases", "total_tested" ],
+                'change': {'demographics-age-count': 'demographics-age-confirmed_cases'}
+            },
+            {
+                'path': "gender",
+                'blacklist': [ "confirmed_cases", "total_tested" ],
+                'change': {'demographics-gender-count': 'demographics-gender-confirmed_cases'}
+            },
+            {
+                'path': "race",
+                'blacklist': [ "confirmed_cases", "total_tested" ],
+                'change': {'demographics-race-count': 'demographics-race-confirmed_cases'}
+            },
+        ],
+    }
+
     S3_DATE_FORMAT = "%Y%m%d"
     DAYS = 7
 
