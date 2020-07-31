@@ -14,7 +14,7 @@ from flask import current_app as app
 from flask_script import Manager
 from config import Config, __APP_NAME__, __AUTHOR_EMAIL__
 from app import create_app, cache
-from app.api import fetch_report, load_report, get_status
+from app.api import fetch_report, load_report, delete_report, get_status
 from app.utils import TODAY, YESTERDAY
 
 BASEDIR = p.dirname(__file__)
@@ -196,6 +196,43 @@ def fetch_reports(end, days, enqueue, **kwargs):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
             response = fetch_report(report_date, enqueue=enqueue, **kwargs)
+            logger.debug(response)
+
+
+@manager.option(
+    "-d", "--end", help="the report ending date", default=TODAY.strftime(DATE_FORMAT)
+)
+@manager.option(
+    "-n",
+    "--days",
+    help="the number of historical days to fetch from start",
+    type=int,
+    default=DAYS,
+)
+@manager.option(
+    "-s",
+    "--source",
+    help="source data location",
+    default="idph",
+    choices=["idph", "s3", "ckan"],
+)
+@manager.option(
+    "-r",
+    "--report-type",
+    help="report type",
+    default="county",
+    choices=["county", "zip", "hospital"],
+)
+@manager.option("-e", "--enqueue", help="queue the work", action="store_true")
+def delete_reports(end, days, enqueue, **kwargs):
+    """Delete ckan reports"""
+    with app.app_context():
+        end_date = dt.strptime(end, DATE_FORMAT)
+
+        for day in range(days):
+            start_date = end_date - timedelta(days=day)
+            report_date = start_date.strftime(DATE_FORMAT)
+            response = delete_report(report_date, enqueue=enqueue, **kwargs)
             logger.debug(response)
 
 

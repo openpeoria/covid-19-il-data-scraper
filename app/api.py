@@ -301,6 +301,7 @@ def save_ckan_report(src, report_date, **kwargs):
 
         if overwrite and is_update:
             # setup post_data for updating new resource
+            logger.warning("The update function might not have worked. See Github Issue at https://github.com/openpeoria/covid-19-il-data-scraper/issues/12")
             post_data = {
                 "url": CKAN_API_BASE_URL + '/resource_update',
                 "data": {"id": json['result']['results'][0]['id']}
@@ -528,6 +529,55 @@ PARSERS = {
 }
 
 
+# TODO: change report to report_id
+def remove_ckan_report(report_date, report, report_type, **kwargs):
+    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
+    r = requests.post(
+        f"{CKAN_API_BASE_URL}/resource_delete",
+        data={"id": report['id']},
+        headers=headers,
+    )
+    if r.ok:
+        response = {
+            "ok": True,
+            "message": f"Successfully deleted {report['name']}!",
+            "last_modified": report.get("last_modified"),
+            "etag": report.get("name", "").strip('"'),
+            "content_length": report.get("content_length"),
+            "status_code": r.status_code,
+        }
+    else:
+        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.json()['error']}")
+
+    return response
+
+
+def get_ckan_reports(report_date, report_type, **kwargs):
+    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
+    config = REPORT_CONFIGS[report_type]
+    json_name = config["filename"].format(report_date)
+    csv_name = json_name.replace('.json', '-')
+    responses = []
+    for name in [json_name, csv_name]:
+        r = requests.post(
+            # resource_search by name matches any files that have
+            # the {filename} in the file name (not an exact match)
+            f"{CKAN_API_BASE_URL}/resource_search",
+            data={"query": f"name:{name}"},
+            headers=headers,
+        )
+
+        try:
+            json = r.json()
+        except JSONDecodeError:
+            json = {}
+
+        if 'result' in json and json['result']['count']:
+            responses += json['result']['results']
+
+    return responses
+
+
 def get_idph_report(report_date, **kwargs):
     report_type = kwargs["report_type"]
     config = REPORT_CONFIGS[report_type]
@@ -548,12 +598,16 @@ def get_idph_report(report_date, **kwargs):
 
 
 REPORT_FUNCS = {
-    (True, "get", "county"): partial(get_3s_report, report_type="county"),
-    (True, "get", "zip"): partial(get_3s_report, report_type="zip"),
-    (True, "get", "hospital"): partial(get_3s_report, report_type="hospital"),
-    (False, "get", "county"): partial(get_idph_report, report_type="county"),
-    (False, "get", "zip"): partial(get_idph_report, report_type="zip"),
-    (False, "get", "hospital"): partial(get_idph_report, report_type="hospital"),
+    ('s3', "get", "county"): partial(get_3s_report, report_type="county"),
+    ('s3', "get", "zip"): partial(get_3s_report, report_type="zip"),
+    ('s3', "get", "hospital"): partial(get_3s_report, report_type="hospital"),
+    ('idph', "get", "county"): partial(get_idph_report, report_type="county"),
+    ('idph', "get", "zip"): partial(get_idph_report, report_type="zip"),
+    ('idph', "get", "hospital"): partial(get_idph_report, report_type="hospital"),
+    ('ckan', "get", "county"): partial(get_ckan_reports, report_type="county"),
+    ('ckan', "get", "zip"): partial(get_ckan_reports, report_type="zip"),
+    ('ckan', "get", "hospital"): partial(get_ckan_reports, report_type="hospital"),
+
     ('s3', "save", "county"): partial(save_3s_report, report_type="county"),
     ('s3', "save", "zip"): partial(save_3s_report, report_type="zip"),
     ('s3', "save", "hospital"): partial(save_3s_report, report_type="hospital"),
@@ -563,12 +617,22 @@ REPORT_FUNCS = {
     ('ckan', "save", "county"): partial(save_ckan_report, report_type="county"),
     ('ckan', "save", "zip"): partial(save_ckan_report, report_type="zip"),
     ('ckan', "save", "hospital"): partial(save_ckan_report, report_type="hospital"),
+
+    ('ckan', "remove", "county"): partial(remove_ckan_report, report_type="county"),
+    ('ckan', "remove", "zip"): partial(remove_ckan_report, report_type="zip"),
+    ('ckan', "remove", "hospital"): partial(remove_ckan_report, report_type="hospital"),
 }
 
 
-def get_report(report_date, report_type="county", use_s3=False, **kwargs):
-    report_func = REPORT_FUNCS[(use_s3, "get", report_type)]
+# get_report function returns multiple reports when src='ckan'
+def get_report(report_date, src='idph', report_type="county", **kwargs):
+    report_func = REPORT_FUNCS[(src, "get", report_type)]
     return report_func(report_date, **kwargs)
+
+
+def remove_report(report, report_date, report_type="county", src='idph', **kwargs):
+    report_func = REPORT_FUNCS[(src, "remove", report_type)]
+    return report_func(report_date, report, **kwargs)
 
 
 def save_report(report, report_date, report_type="county", **kwargs):
@@ -620,20 +684,18 @@ def fetch_report(report_date, enqueue=False, **kwargs):
     if enqueue:
         response = enqueue_work(report_date, **kwargs)
     else:
-        # TODO: Possibly change get_report
-        get_from_s3 = kwargs.get("source") == "s3"
-
-        report = get_report(report_date, use_s3=get_from_s3, **kwargs)
+        source = kwargs.get('source', 'idph')
+        report = get_report(report_date, src=source, **kwargs)
         return save_report(report, report_date, **kwargs)
 
 
 def load_report(report_date, enqueue=False, **kwargs):
     if enqueue:
-        job = q.enqueue(get_report, report_date, use_s3=True, **kwargs)
+        job = q.enqueue(get_report, report_date, src='s3', **kwargs)
         resp = get_job_result(job)
         json = resp["result"]
     else:
-        json = get_report(report_date, use_s3=True, **kwargs)
+        json = get_report(report_date, src='s3', **kwargs)
 
     if json:
         response = {
@@ -644,6 +706,27 @@ def load_report(report_date, enqueue=False, **kwargs):
         response = get_error_resp(f"No data found for date {report_date}.")
 
     return response
+
+
+def delete_report(report_date, enqueue=False, **kwargs):
+    if enqueue:
+        pass
+    #     response = enqueue_work(report_date, **kwargs)
+    else:
+        src = kwargs.get('source', 'idph')
+        json = {}
+        if src == 'ckan':
+            reports = get_report(report_date, src, **kwargs)
+            if reports:
+                for report in reports:
+                    json[report['name']] = remove_report(report, report_date, src=src, **kwargs)
+            else:
+                json['error'] = get_error_resp(f'No reports were found with date="{report_date}""')
+        else:
+            report = get_report(report_date, src, **kwargs)
+            json['report'] = remove_report(report, report_date, src=src, **kwargs)
+
+        return json
 
 
 def get_status(use_s3=True, **kwargs):
@@ -731,7 +814,7 @@ class Report(MethodView):
             date (str): Date of the report to save.
         """
         self.kwargs = parse_kwargs(app)
-        end = self.kwargs.get("end", date.today().strftime(S3_DATE_FORMAT))
+        end = str(self.kwargs.get("end", date.today().strftime(S3_DATE_FORMAT)))
         self.end_date = dt.strptime(end, S3_DATE_FORMAT)
         self.days = self.kwargs.get("days", DAYS)
 
@@ -764,6 +847,19 @@ class Report(MethodView):
                 result[report_date] = json
 
         response["result"] = result
+        return jsonify(**response)
+
+    def delete(self):
+        """ Deletes reports """
+        result = {}
+
+        for day in range(self.days):
+            start_date = self.end_date - timedelta(days=day)
+            report_date = start_date.strftime(S3_DATE_FORMAT)
+            json = delete_report(report_date, **self.kwargs)
+            result[report_date] = {**json}
+
+        response = {'result': result}
         return jsonify(**response)
 
 
@@ -800,7 +896,7 @@ method_views = {
         "param": "string:path",
         "methods": ["GET", "DELETE"],
     },
-    "report": {"view": Report, "methods": ["GET", "POST"]},
+    "report": {"view": Report, "methods": ["GET", "POST", "DELETE"]},
 }
 
 for name, options in method_views.items():
