@@ -466,8 +466,10 @@ def parse_idph_county_report(requested_date, last_updated, **json):
         historical_county = {
             v["testDate"]: v["values"] for v in historical_county_values
         }
+        state_filter = lambda x: True if 'testDate' in x else False
+        state_testing_results = filter(state_filter, json["state_testing_results"]["values"])
         historical_state = {
-            v["testDate"]: v for v in json["state_testing_results"]["values"]
+            v["testDate"]: v for v in state_testing_results
         }
         county = historical_county.get(date_key, {})
         state = historical_state.get(date_key, {})
