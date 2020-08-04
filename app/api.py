@@ -221,25 +221,27 @@ def json2rows(src, path):
                     obj[depth] = {}
                     obj[depth][index] = {new_key: v}
 
-    for index in obj[max(obj.keys())].keys():
-        accumulator = ''
-        row = {}
-        for pos, num in enumerate(index.split('-')):
-            pos += 1
-            if pos == 1:
-                accumulator += num
-            else:
-                accumulator += '-' + num
+    keys = obj.keys()
+    if len(keys) > 0:
+        for index in obj[max(keys)].keys():
+            accumulator = ''
+            row = {}
+            for pos, num in enumerate(index.split('-')):
+                pos += 1
+                if pos == 1:
+                    accumulator += num
+                else:
+                    accumulator += '-' + num
 
-            row = {**row, **obj[pos][accumulator]}
-        yield row
+                row = {**row, **obj[pos][accumulator]}
+            yield row
 
 
 def read_json(src, path):
     data = loads(src)
     # TODO: this could be more resilient
     for key in path.split('.'):
-        data = data[key]
+        data = data[key] if key in data else {}
     yield data
 
 
@@ -250,21 +252,27 @@ def json2csvs(src, report_type):
             gen_records = read_zipcodes if report_type == 'zip' else read_json
             records = gen_records(src, path=path['path'])
             rows_gen = json2rows(records, path)
-            csv_report = records2csv(rows_gen)
+            try:
+                _csv_report = records2csv(rows_gen)
+                csv_report = _csv_report.read()
+            except StopIteration as err:
+                csv_report = ''
+                # if a generator is empty, that means there was no data for the given path
+                print(f"records2csv function Runtime Error: {err}")
             yield {
-                'src': csv_report.read(),
+                'src': csv_report,
                 'filename': f'{report_type}.{path["path"]}'
             }
 
 
 def prep_for_upload(csvs, base_filename):
-    # TODO: perhaps change the REPORT_CONFIGS filename instead
     for src in csvs:
-        yield {
-            'src': src['src'],
-            'filename': f"{base_filename.replace('.json', '')}-{src['filename']}.csv",
-            'mimetype': 'text/csv',
-        }
+        if src['src']:
+            yield {
+                'src': src['src'],
+                'filename': f"{base_filename.replace('.json', '')}-{src['filename']}.csv",
+                'mimetype': 'text/csv',
+            }
 
 
 def save_ckan_report(src, report_date, **kwargs):
@@ -548,7 +556,7 @@ def remove_ckan_report(report_date, report, report_type, **kwargs):
             "status_code": r.status_code,
         }
     else:
-        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.json()['error']}")
+        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.text}")
 
     return response
 
