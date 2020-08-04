@@ -19,7 +19,6 @@ import pygogo as gogo
 
 from flask import make_response, request
 from dateutil.relativedelta import relativedelta
-from urllib.error import URLError
 
 from meza import fntools as ft, convert as cv
 

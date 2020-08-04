@@ -19,8 +19,6 @@
 from os import getenv, urandom, path as p
 from datetime import timedelta
 from collections import namedtuple
-from socket import error as SocketError, timeout as SocketTimeout
-from pathlib import Path
 
 import requests
 import pygogo as gogo
