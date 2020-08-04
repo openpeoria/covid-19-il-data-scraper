@@ -556,7 +556,7 @@ def remove_ckan_report(report_date, report, report_type, **kwargs):
             "status_code": r.status_code,
         }
     else:
-        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.json()['error']}")
+        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.text}")
 
     return response
 
