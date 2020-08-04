@@ -103,7 +103,7 @@ class Config(object):
     }
     COVID_CSV_PATHS = {
         "county": [
-            { 'path': "county", 'blacklist': [] },
+            { 'path': "county", 'blacklist': [], 'change': {} },
             {
                 'path': "demographics.age",
                 'blacklist': [
@@ -111,15 +111,16 @@ class Config(object):
                     "tested",
                     "deaths",
                     "demographics-race-color",
-                ]
+                ],
+                'change': {}
             },
-            { 'path': "demographics.gender", 'blacklist': [] },
-            { 'path': "demographics.race", 'blacklist': [] },
-            { 'path': "state", 'blacklist': [] },
+            { 'path': "demographics.gender", 'blacklist': [], 'change': {} },
+            { 'path': "demographics.race", 'blacklist': [], 'change': {} },
+            { 'path': "state", 'blacklist': [], 'change': {} },
         ],
         "hospital": [
-            { "path": "region", 'blacklist': ["id"] },
-            { "path": "state", 'blacklist': [] }
+            { "path": "region", 'blacklist': ["id"], 'change': {} },
+            { "path": "state", 'blacklist': [], 'change': {} }
         ],
         "zip": [
             {
