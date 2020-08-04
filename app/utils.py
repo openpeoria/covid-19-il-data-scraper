@@ -55,7 +55,7 @@ AUTH_ROUTES = {
 
 get_hash = lambda text: md5(str(text).encode(ENCODING)).hexdigest()
 
-KEY_WHITELIST = Config.KEY_WHITELIST
+APP_CONFIG_WHITELIST = Config.APP_CONFIG_WHITELIST
 TODAY = date.today()
 YESTERDAY = TODAY - timedelta(days=1)
 
@@ -129,7 +129,7 @@ def make_cache_key(*args, **kwargs):
         (obj): Flask request url
     """
     mimetype = get_mimetype(request)
-    return f"{request.method}:{request.full_path}"
+    return f"{mimetype}:{request.full_path}"
 
 
 def fmt_elapsed(elapsed):
@@ -379,11 +379,28 @@ def get_links(rules):
 
 
 def parse_kwargs(app):
-    kwargs = {k: parse(v) for k, v in request.args.to_dict().items()}
+    form = request.form or {}
+    args = request.args.to_dict()
+    _kwargs = {**form, **args}
+    kwargs = {k: parse(v) for k, v in _kwargs.items()}
 
     with app.app_context():
         for k, v in app.config.items():
-            if k in KEY_WHITELIST:
+            if k in APP_CONFIG_WHITELIST:
                 kwargs.setdefault(k.lower(), v)
 
     return kwargs
+
+
+def gen_config(app):
+    with app.app_context():
+        for k, v in app.config.items():
+            if k in APP_CONFIG_WHITELIST:
+                yield (k.lower(), v)
+
+
+def parse_request():
+    values = request.values or {}
+    json = request.json or {}
+    kwargs = {**values, **json}
+    return {k: parse(v) for k, v in kwargs.items()}

@@ -3,7 +3,7 @@
 # vim: sw=4:ts=4:expandtab
 
 """ A script to manage development tasks """
-from os import path as p, getenv
+from os import path as p
 from subprocess import call, check_call, CalledProcessError
 from urllib.parse import urlsplit
 from datetime import datetime as dt, timedelta
@@ -12,10 +12,12 @@ import pygogo as gogo
 
 from flask import current_app as app
 from flask_script import Manager
-from config import Config, __APP_NAME__, __AUTHOR_EMAIL__
-from app import create_app, cache
+
+from config import Config
+from app import create_app
 from app.api import fetch_report, load_report, delete_report, get_status
-from app.utils import TODAY, YESTERDAY
+from app.utils import TODAY
+from app.helpers import log, exception_hook
 
 BASEDIR = p.dirname(__file__)
 DEF_PORT = 5000
@@ -27,39 +29,7 @@ manager.add_option("-m", "--cfgmode", dest="config_mode", default="Development")
 manager.add_option("-f", "--cfgfile", dest="config_file", type=p.abspath)
 manager.main = manager.run  # Needed to do `manage <command>` from the cli
 
-hdlr_kwargs = {
-    "subject": f"{__APP_NAME__} notification",
-    "recipients": [__AUTHOR_EMAIL__],
-}
-
-if getenv("MAILGUN_SMTP_PASSWORD"):
-    # NOTE: Sandbox domains are restricted to authorized recipients only.
-    def_username = f"postmaster@{getenv('MAILGUN_DOMAIN')}"
-    mailgun_kwargs = {
-        "host": getenv("MAILGUN_SMTP_SERVER", "smtp.mailgun.org"),
-        "port": getenv("MAILGUN_SMTP_PORT", 587),
-        "sender": f"notifications@{getenv('MAILGUN_DOMAIN')}",
-        "username": getenv("MAILGUN_SMTP_LOGIN", def_username),
-        "password": getenv("MAILGUN_SMTP_PASSWORD"),
-    }
-
-    hdlr_kwargs.update(mailgun_kwargs)
-
-high_hdlr = gogo.handlers.email_hdlr(**hdlr_kwargs)
-logger = gogo.Gogo(__name__, high_hdlr=high_hdlr).logger
-
-
-def log(message=None, ok=True, r=None, **kwargs):
-    if r:
-        try:
-            message = r.json().get("message")
-        except JSONDecodeError:
-            message = r.text
-
-    if message and ok:
-        logger.info(message)
-    elif message:
-        logger.error(message)
+logger = gogo.Gogo(__name__).logger
 
 
 @manager.option("-h", "--host", help="The server host")
@@ -174,7 +144,7 @@ def require():
     "--source",
     help="source data location",
     default="idph",
-    choices=["idph", "s3"],
+    choices=["idph", "s3", "ckan"],
 )
 @manager.option(
     "-t", "--dest", help="dest file location", default="local", choices=["local", "ckan", "s3"]
@@ -195,8 +165,13 @@ def fetch_reports(end, days, enqueue, **kwargs):
         for day in range(days):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
-            response = fetch_report(report_date, enqueue=enqueue, **kwargs)
-            logger.debug(response)
+
+            try:
+                response = fetch_report(report_date, enqueue=enqueue, **kwargs)
+            except Exception as e:
+                exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
+            else:
+                log(**response)
 
 
 @manager.option(
@@ -232,8 +207,13 @@ def delete_reports(end, days, enqueue, **kwargs):
         for day in range(days):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
-            response = delete_report(report_date, enqueue=enqueue, **kwargs)
-            logger.debug(response)
+
+            try:
+                response = delete_report(report_date, enqueue=enqueue, **kwargs)
+            except Exception as e:
+                exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
+            else:
+                log(**response)
 
 
 @manager.option(
@@ -247,7 +227,7 @@ def delete_reports(end, days, enqueue, **kwargs):
     default=DAYS,
 )
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
-def load_reports(end, days, enqueue):
+def load_reports(end, days, enqueue, **kwargs):
     """Fetch s3 reports to return time series"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
@@ -255,8 +235,13 @@ def load_reports(end, days, enqueue):
         for day in range(days):
             start_date = end_date - timedelta(days=day)
             report_date = start_date.strftime(DATE_FORMAT)
-            response = load_report(report_date, enqueue=enqueue)
-            logger.debug(response)
+
+            try:
+                response = load_report(report_date, enqueue=enqueue)
+            except Exception as e:
+                exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
+            else:
+                log(**response)
 
 
 @manager.option(
@@ -273,8 +258,13 @@ def status(source, **kwargs):
     """Fetch IDPH reports save to disk"""
     with app.app_context():
         use_s3 = source == "s3"
-        response = get_status(use_s3=use_s3, **kwargs)
-        log(**response)
+
+        try:
+            response = get_status(use_s3=use_s3, **kwargs)
+        except Exception as e:
+            exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
+        else:
+            log(**response)
 
 
 @manager.command
