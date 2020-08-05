@@ -294,12 +294,14 @@ def get_params(rule):
 def get_rel(href, method, rule):
     """ Returns the `rel` of an endpoint (see `Returns` below).
 
-    If the rule is a common rule as specified in the utils.py file, then that rel is returned.
+    If the rule is a common rule as specified in the utils.py file, then that rel is
+    returned.
 
-    If the current url is the same as the href for the current route, `self` is returned.
+    If the current url is the same as the href for the current route, `self` is
+    returned.
 
     Args:
-        href (str): the full url of the endpoint (e.g. https://alegna-api.nerevu.com/v1/data)
+        href (str): the full endpoint url (e.g. https://alegna-api.nerevu.com/v1/data)
         method (str): an HTTP method (e.g. 'GET' or 'DELETE')
         rule (str): the endpoint path (e.g. '/v1/data/<int:id>')
 
@@ -331,17 +333,18 @@ def get_rel(href, method, rule):
         rel = get_common_rel(resourceName, method)
 
         # add the method if not common or GET
-        if not rel and method == "GET":
+        if not rel:
             rel = resourceName
-        elif not rel:
-            rel = f"{resourceName}_{method.lower()}"
+
+            if method != "GET":
+                rel = f"{rel}_{method.lower()}"
 
         # get params and add to rel
         params = get_params(rule)
+        joined_params = "_".join(params)
 
-        if params:
-            joined_params = "_".join(params)
-            rel += f"_{joined_params}"
+        if joined_params:
+            rel = f"{rel}_{joined_params}"
 
     return rel
 
@@ -358,8 +361,11 @@ def gen_links(rules):
     """ Makes a generator of all endpoints, their methods,
     and their rels (strings representing purpose of the endpoint)
 
-    Yields:
-        (dict): Example - {"rel": "data", "href": f"https://alegna-api.nerevu.com/v1/data", "method": "GET"}
+    Yields: (dict)
+
+    Examples:
+    >>> gen_links(rules)
+    {"rel": "data", "href": f"https://alegna-api.nerevu.com/v1/data", "method": "GET"}
     """
     url_root = get_url_root()
 

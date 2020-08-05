@@ -217,8 +217,8 @@ class Config(object):
     OAUTHLIB_INSECURE_TRANSPORT = False
 
     # CKAN
-    CKAN_API_KEY= getenv("CKAN_API_KEY")
-    CKAN_API_BASE_URL = 'https://openpeoria.nerevu.com/api/3/action'
+    CKAN_API_KEY = getenv("CKAN_API_KEY")
+    CKAN_API_BASE_URL = "https://openpeoria.nerevu.com/api/3/action"
 
 
 class Production(Config):

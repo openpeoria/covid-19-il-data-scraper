@@ -35,7 +35,6 @@ from flask import (
 from flask.views import MethodView
 from rq import Queue
 
-from meza.convert import records2csv
 from config import Config
 from app import cache
 from app.utils import (
@@ -46,6 +45,8 @@ from app.utils import (
     get_links,
 )
 from app.connection import conn
+
+from meza.convert import records2csv
 
 # https://requests-oauthlib.readthedocs.io/en/latest/index.html
 # https://oauth-pythonclient.readthedocs.io/en/latest/index.html
@@ -83,7 +84,9 @@ S3_DATE_FORMAT = Config.S3_DATE_FORMAT
 REPORT_CONFIGS = Config.REPORT_CONFIGS
 COVID_CSV_PATHS = Config.COVID_CSV_PATHS
 CKAN_API_KEY = Config.CKAN_API_KEY
+REPORTS = Config.REPORTS
 CKAN_API_BASE_URL = Config.CKAN_API_BASE_URL
+CKAN_HEADERS = {"X-CKAN-API-Key": Config.CKAN_API_KEY}
 
 DAYS = Config.DAYS
 
@@ -103,7 +106,7 @@ def _clear_cache():
 
 def _get_last_update_date(use_s3=True, bucket_name=S3_BUCKET, **kwargs):
     report_type = kwargs["report_type"]
-    config = REPORT_CONFIGS[report_type]
+    config = REPORTS[report_type]
     prefix = config["filename"].split("{}")[0]
 
     if use_s3:
@@ -353,7 +356,7 @@ def save_ckan_report(src, report_date, **kwargs):
 
 def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     report_type = kwargs["report_type"]
-    config = REPORT_CONFIGS[report_type]
+    config = REPORTS[report_type]
     filename = config["filename"].format(report_date)
 
     try:
@@ -412,7 +415,7 @@ def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
 
 
 def save_local_report(src, report_date, report_type=None, **kwargs):
-    config = REPORT_CONFIGS[report_type]
+    config = REPORTS[report_type]
     filename = config["filename"].format(report_date)
 
     with open(filename, mode="wb") as dest:
@@ -435,7 +438,7 @@ def save_local_report(src, report_date, report_type=None, **kwargs):
 def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     f = BytesIO()
     report_type = kwargs["report_type"]
-    config = REPORT_CONFIGS[report_type]
+    config = REPORTS[report_type]
     filename = config["filename"].format(report_date)
 
     try:
@@ -454,7 +457,7 @@ def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
 
 
 def parse_idph_county_report(requested_date, last_updated, **json):
-    config = REPORT_CONFIGS["county"]
+    config = REPORTS["county"]
     date_format = config["date_format"]
 
     historical_county_values = json["historical_county"]["values"]
@@ -487,7 +490,7 @@ def parse_idph_county_report(requested_date, last_updated, **json):
 
 
 def parse_idph_hospital_report(requested_date, last_updated, **json):
-    config = REPORT_CONFIGS["hospital"]
+    config = REPORTS["hospital"]
     date_format = config["date_format"]
 
     historical_hospital_values = json["HospitalUtilizationResults"]
@@ -581,7 +584,7 @@ def get_ckan_reports(report_date, report_type, **kwargs):
 
 def get_idph_report(report_date, **kwargs):
     report_type = kwargs["report_type"]
-    config = REPORT_CONFIGS[report_type]
+    config = REPORTS[report_type]
     report_name = config["report_name"]
     r = requests.get(BASE_URL.format(report_name))
 
@@ -820,8 +823,7 @@ class Report(MethodView):
         self.days = self.kwargs.get("days", DAYS)
 
     def post(self):
-        """ Saves new reports
-        """
+        """ Saves reports"""
         result = {}
 
         for day in range(self.days):
@@ -834,8 +836,7 @@ class Report(MethodView):
         return jsonify(**response)
 
     def get(self):
-        """ Retrieves saved reports
-        """
+        """ Retrieves reports"""
         result = {}
 
         for day in range(self.days):
@@ -851,7 +852,7 @@ class Report(MethodView):
         return jsonify(**response)
 
     def delete(self):
-        """ Deletes reports """
+        """ Removes reports """
         result = {}
 
         for day in range(self.days):
