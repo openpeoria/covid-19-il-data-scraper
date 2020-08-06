@@ -230,6 +230,13 @@ def remove_reports(end, days, enqueue, **kwargs):
     type=int,
     default=DAYS,
 )
+@manager.option(
+    "-r",
+    "--report-type",
+    help="report type",
+    default="county",
+    choices=["county", "zip", "hospital"],
+)
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
 def load_reports(end, days, enqueue, **kwargs):
     """Fetch reports to return time series"""
@@ -241,7 +248,7 @@ def load_reports(end, days, enqueue, **kwargs):
             report_date = start_date.strftime(DATE_FORMAT)
 
             try:
-                response = load_report(report_date, enqueue=enqueue)
+                response = load_report(report_date, enqueue=enqueue, **kwargs)
             except Exception as e:
                 exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
             else:
