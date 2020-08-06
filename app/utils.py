@@ -19,10 +19,10 @@ import pygogo as gogo
 
 from flask import make_response, request
 from dateutil.relativedelta import relativedelta
-from urllib.error import URLError
 
 from meza import fntools as ft, convert as cv
 
+from config import Config
 from app import cache
 
 logger = gogo.Gogo(__name__, monolog=True).logger
@@ -52,9 +52,18 @@ AUTH_ROUTES = {
     ("status", "GET"): "status",
 }
 
+CTYPES = {
+    "pdf": "application/octet-stream",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "json": "application/json",
+}
 
 get_hash = lambda text: md5(str(text).encode(ENCODING)).hexdigest()
 
+APP_CONFIG_WHITELIST = Config.APP_CONFIG_WHITELIST
 TODAY = date.today()
 YESTERDAY = TODAY - timedelta(days=1)
 
@@ -128,7 +137,7 @@ def make_cache_key(*args, **kwargs):
         (obj): Flask request url
     """
     mimetype = get_mimetype(request)
-    return f"{request.method}:{request.full_path}"
+    return f"{mimetype}:{request.full_path}"
 
 
 def fmt_elapsed(elapsed):
@@ -293,12 +302,14 @@ def get_params(rule):
 def get_rel(href, method, rule):
     """ Returns the `rel` of an endpoint (see `Returns` below).
 
-    If the rule is a common rule as specified in the utils.py file, then that rel is returned.
+    If the rule is a common rule as specified in the utils.py file, then that rel is
+    returned.
 
-    If the current url is the same as the href for the current route, `self` is returned.
+    If the current url is the same as the href for the current route, `self` is
+    returned.
 
     Args:
-        href (str): the full url of the endpoint (e.g. https://alegna-api.nerevu.com/v1/data)
+        href (str): the full endpoint url (e.g. https://alegna-api.nerevu.com/v1/data)
         method (str): an HTTP method (e.g. 'GET' or 'DELETE')
         rule (str): the endpoint path (e.g. '/v1/data/<int:id>')
 
@@ -332,13 +343,15 @@ def get_rel(href, method, rule):
         # add the method if not common or GET
         if not rel:
             rel = resourceName
+
             if method != "GET":
                 rel = f"{rel}_{method.lower()}"
 
         # get params and add to rel
         params = get_params(rule)
-        if params:
-            joined_params = "_".join(params)
+        joined_params = "_".join(params)
+
+        if joined_params:
             rel = f"{rel}_{joined_params}"
 
     return rel
@@ -356,8 +369,11 @@ def gen_links(rules):
     """ Makes a generator of all endpoints, their methods,
     and their rels (strings representing purpose of the endpoint)
 
-    Yields:
-        (dict): Example - {"rel": "data", "href": f"https://alegna-api.nerevu.com/v1/data", "method": "GET"}
+    Yields: (dict)
+
+    Examples:
+    >>> gen_links(rules)
+    {"rel": "data", "href": f"https://alegna-api.nerevu.com/v1/data", "method": "GET"}
     """
     url_root = get_url_root()
 
@@ -374,3 +390,31 @@ def get_links(rules):
     """
     links = gen_links(rules)
     return sorted(links, key=lambda link: link["href"])
+
+
+def parse_kwargs(app):
+    form = request.form or {}
+    args = request.args.to_dict()
+    _kwargs = {**form, **args}
+    kwargs = {k: parse(v) for k, v in _kwargs.items()}
+
+    with app.app_context():
+        for k, v in app.config.items():
+            if k in APP_CONFIG_WHITELIST:
+                kwargs.setdefault(k.lower(), v)
+
+    return kwargs
+
+
+def gen_config(app):
+    with app.app_context():
+        for k, v in app.config.items():
+            if k in APP_CONFIG_WHITELIST:
+                yield (k.lower(), v)
+
+
+def parse_request():
+    values = request.values or {}
+    json = request.json or {}
+    kwargs = {**values, **json}
+    return {k: parse(v) for k, v in kwargs.items()}
