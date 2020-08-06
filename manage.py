@@ -144,14 +144,14 @@ def require():
     "--source",
     help="source data location",
     default="idph",
-    choices=["idph", "s3", "ckan"],
+    choices=["idph", "local", "s3", "ckan"],
 )
 @manager.option(
     "-t",
     "--dest",
     help="dest file location",
     default="local",
-    choices=["local", "ckan", "s3"],
+    choices=["idph", "local", "s3", "ckan"],
 )
 @manager.option(
     "-r",
@@ -193,7 +193,7 @@ def add_reports(end, days, enqueue, **kwargs):
     "--source",
     help="source data location",
     default="idph",
-    choices=["idph", "s3", "ckan"],
+    choices=["idph", "local", "s3", "ckan"],
 )
 @manager.option(
     "-r",
@@ -256,7 +256,11 @@ def load_reports(end, days, enqueue, **kwargs):
 
 
 @manager.option(
-    "-s", "--source", help="status location", default="local", choices=["local", "s3"]
+    "-s",
+    "--source",
+    help="source data location",
+    default="local",
+    choices=["idph", "local", "s3", "ckan"],
 )
 @manager.option(
     "-r",
