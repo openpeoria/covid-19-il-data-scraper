@@ -123,65 +123,72 @@ class Config(object):
     # Authentication
     AUTHENTICATION = {}
 
+    # CKAN
+    CKAN_API_KEY = getenv("CKAN_API_KEY")
+    CKAN_API_BASE_URL = "https://openpeoria.nerevu.com/api/3/action"
+    REQUIRED_SETTINGS += ["CKAN_API_KEY"]
+
     # Data
     BASE_URL = "https://www.dph.illinois.gov/sitefiles/{}.json?nocache=1"
-    REPORT_CONFIGS = {
+    REPORTS = {
         "county": {
             "report_name": "COVIDHistoricalTestResults",
-            "filename": "IL_county_COVID19_data_{}.json",
+            "basename": "IL_county_COVID19_data_{}",
             "date_format": "%m/%d/%Y",
             "package_id": "il-covid19",
+            "csv_options": [
+                {"path": "county"},
+                {
+                    "path": "demographics.age",
+                    "nested_path": "demographics",
+                    "blacklist": ["count", "tested", "deaths", "race-color",],
+                    "change": {"race-count": "race-confirmed_cases"},
+                },
+                {
+                    "path": "demographics.gender",
+                    "blacklist": ["color"],
+                    "change": {"count": "confirmed_cases"},
+                },
+                {
+                    "path": "demographics.race",
+                    "blacklist": ["color"],
+                    "change": {"count": "confirmed_cases"},
+                },
+                {"path": "state"},
+            ],
         },
         "zip": {
             "report_name": "COVIDZip",
-            "filename": "IL_zip_COVID19_data_{}.json",
+            "basename": "IL_zip_COVID19_data_{}",
             "package_id": "illinois-covid19-cases-zip",
+            "csv_options": [
+                {
+                    "path": "zipcodes.[].demographics.age",
+                    "blacklist": ["confirmed_cases", "total_tested"],
+                    "change": {"count": "confirmed_cases"},
+                },
+                {
+                    "path": "zipcodes.[].demographics.gender",
+                    "blacklist": ["confirmed_cases", "total_tested", "color"],
+                    "change": {"count": "confirmed_cases"},
+                },
+                {
+                    "path": "zipcodes.[].demographics.race",
+                    "blacklist": ["confirmed_cases", "total_tested", "color"],
+                    "change": {"count": "confirmed_cases"},
+                },
+            ],
         },
         "hospital": {
             "report_name": "COVIDHospitalRegions",
-            "filename": "IL_regional_hospital_data_{}.json",
+            "basename": "IL_regional_hospital_data_{}",
             "date_format": "%Y-%m-%d",
             "package_id": "illinois-regional-hospital-data",
+            "csv_options": [
+                {"path": "region", "blacklist": ["id"]},
+                {"path": "state"},
+            ],
         },
-    }
-    COVID_CSV_PATHS = {
-        "county": [
-            { 'path': "county", 'blacklist': [], 'change': {} },
-            {
-                'path': "demographics.age",
-                'blacklist': [
-                    "count",
-                    "tested",
-                    "deaths",
-                    "demographics-race-color",
-                ],
-                'change': {}
-            },
-            { 'path': "demographics.gender", 'blacklist': [], 'change': {} },
-            { 'path': "demographics.race", 'blacklist': [], 'change': {} },
-            { 'path': "state", 'blacklist': [], 'change': {} },
-        ],
-        "hospital": [
-            { "path": "region", 'blacklist': ["id"], 'change': {} },
-            { "path": "state", 'blacklist': [], 'change': {} }
-        ],
-        "zip": [
-            {
-                'path': "age",
-                'blacklist': [ "confirmed_cases", "total_tested" ],
-                'change': {'demographics-age-count': 'demographics-age-confirmed_cases'}
-            },
-            {
-                'path': "gender",
-                'blacklist': [ "confirmed_cases", "total_tested" ],
-                'change': {'demographics-gender-count': 'demographics-gender-confirmed_cases'}
-            },
-            {
-                'path': "race",
-                'blacklist': [ "confirmed_cases", "total_tested" ],
-                'change': {'demographics-race-count': 'demographics-race-confirmed_cases'}
-            },
-        ],
     }
 
     S3_DATE_FORMAT = "%Y%m%d"
@@ -215,10 +222,6 @@ class Config(object):
     CHUNK_SIZE = 256
     ROW_LIMIT = 32
     OAUTHLIB_INSECURE_TRANSPORT = False
-
-    # CKAN
-    CKAN_API_KEY = getenv("CKAN_API_KEY")
-    CKAN_API_BASE_URL = "https://openpeoria.nerevu.com/api/3/action"
 
 
 class Production(Config):

@@ -15,7 +15,7 @@ from flask_script import Manager
 
 from config import Config
 from app import create_app
-from app.api import fetch_report, load_report, delete_report, get_status
+from app.api import add_report, load_report, remove_report, get_status
 from app.utils import TODAY
 from app.helpers import log, exception_hook
 
@@ -161,8 +161,8 @@ def require():
     choices=["county", "zip", "hospital"],
 )
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
-def fetch_reports(end, days, enqueue, **kwargs):
-    """Fetch IDPH reports and save to disk"""
+def add_reports(end, days, enqueue, **kwargs):
+    """Upload reports or save to disk"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 
@@ -171,7 +171,7 @@ def fetch_reports(end, days, enqueue, **kwargs):
             report_date = start_date.strftime(DATE_FORMAT)
 
             try:
-                response = fetch_report(report_date, enqueue=enqueue, **kwargs)
+                response = add_report(report_date, enqueue=enqueue, **kwargs)
             except Exception as e:
                 exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
             else:
@@ -203,8 +203,8 @@ def fetch_reports(end, days, enqueue, **kwargs):
     choices=["county", "zip", "hospital"],
 )
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
-def delete_reports(end, days, enqueue, **kwargs):
-    """Delete ckan reports"""
+def remove_reports(end, days, enqueue, **kwargs):
+    """Delete reports"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 
@@ -213,7 +213,7 @@ def delete_reports(end, days, enqueue, **kwargs):
             report_date = start_date.strftime(DATE_FORMAT)
 
             try:
-                response = delete_report(report_date, enqueue=enqueue, **kwargs)
+                response = remove_report(report_date, enqueue=enqueue, **kwargs)
             except Exception as e:
                 exception_hook(e.__class__.__name__, debug=app.debug, use_tb=True)
             else:
@@ -232,7 +232,7 @@ def delete_reports(end, days, enqueue, **kwargs):
 )
 @manager.option("-e", "--enqueue", help="queue the work", action="store_true")
 def load_reports(end, days, enqueue, **kwargs):
-    """Fetch s3 reports to return time series"""
+    """Fetch reports to return time series"""
     with app.app_context():
         end_date = dt.strptime(end, DATE_FORMAT)
 

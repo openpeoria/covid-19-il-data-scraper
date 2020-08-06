@@ -14,7 +14,7 @@ from functools import partial
 from io import BytesIO
 from shutil import copyfileobj
 from datetime import datetime as dt, date, timedelta
-from collections import OrderedDict
+from itertools import chain, groupby
 
 import requests
 import inflect
@@ -37,16 +37,20 @@ from rq import Queue
 
 from config import Config
 from app import cache
+from app.helpers import log
 from app.utils import (
     jsonify,
     parse_kwargs,
     cache_header,
     get_request_base,
     get_links,
+    CTYPES,
 )
 from app.connection import conn
 
 from meza.convert import records2csv
+from meza.fntools import dfilter
+from riko.dotdict import DotDict
 
 # https://requests-oauthlib.readthedocs.io/en/latest/index.html
 # https://oauth-pythonclient.readthedocs.io/en/latest/index.html
@@ -68,8 +72,6 @@ except ProfileNotFound:
 
 s3_client = session.client("s3")
 s3_resource = session.resource("s3")
-
-
 logger = gogo.Gogo(__name__, monolog=True).logger
 
 # these don't change based on mode, so no need to do app.config['...']
@@ -81,9 +83,6 @@ LRU_CACHE_SIZE = Config.LRU_CACHE_SIZE
 BASE_URL = Config.BASE_URL
 S3_BUCKET = Config.S3_BUCKET
 S3_DATE_FORMAT = Config.S3_DATE_FORMAT
-REPORT_CONFIGS = Config.REPORT_CONFIGS
-COVID_CSV_PATHS = Config.COVID_CSV_PATHS
-CKAN_API_KEY = Config.CKAN_API_KEY
 REPORTS = Config.REPORTS
 CKAN_API_BASE_URL = Config.CKAN_API_BASE_URL
 CKAN_HEADERS = {"X-CKAN-API-Key": Config.CKAN_API_KEY}
@@ -107,7 +106,7 @@ def _clear_cache():
 def _get_last_update_date(use_s3=True, bucket_name=S3_BUCKET, **kwargs):
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
-    prefix = config["filename"].split("{}")[0]
+    prefix = config["basename"].split("{}")[0]
 
     if use_s3:
         bucket = s3_resource.Bucket(bucket_name)
@@ -162,202 +161,178 @@ def get_error_resp(e, status_code=500):
     }
 
 
-def read_zipcodes(json, path):
-    data = loads(json)
-    records = data['zipcodes']
-    for zips in records:
-        keys_to_remove = []
-        for key in zips['demographics'].keys():
-            if key != path:
-                keys_to_remove.append(key)
-        for key in keys_to_remove:
-            del zips['demographics'][key]
-        print()
-    yield records
+def flatten(record, *keys, sep="-"):
+    if isinstance(record, list):
+        for pos, r in enumerate(record):
+            yield from flatten(r, *keys, str(pos), sep=sep)
+    elif isinstance(record, dict):
+        for k, v in record.items():
+            yield from flatten(v, *keys, k, sep=sep)
+    else:
+        yield (sep.join(keys), record)
 
 
-def flatten(d,sep="_"):
-    obj = OrderedDict()
+def gen_records(src, *paths, blacklist=None, change=None, nested_path="", **kwargs):
+    data = DotDict(loads(src))
+    change = change or {}
 
-    for i in d:
-        def recurse(t,parent_key=""):
-            if isinstance(t,list):
-                for j in range(len(t)):
-                    recurse(t[j],parent_key + sep + str(j) if parent_key else str(j))
-            elif isinstance(t,dict):
-                for k,v in t.items():
-                    recurse(v,parent_key + sep + k if parent_key else k)
+    try:
+        path, subpath = paths
+    except ValueError:
+        path, subpath = paths[0], None
+
+    for record in data[path]:
+        if subpath:
+            if "." in subpath:
+                subpath_0, subpath_1 = subpath.split(".", maxsplit=1)
+                reference_record = dfilter(record, blacklist + [subpath_0])
+                reference_record[subpath_0] = subpath_1
             else:
-                obj[parent_key] = t
+                reference_record = dfilter(record, blacklist + [subpath])
 
-        if isinstance(i, dict):
-            i = [i]
-        recurse(i)
+            for new_record in DotDict(record)[subpath]:
+                combined = {**new_record, **reference_record}
+                yield {change.get(k, k): v for k, v in combined.items()}
+        elif nested_path:
+            # key is like 'race-7-description'
+            keyfunc = lambda x: "-".join(re.findall(r"\d+", x[0]))
+            reference_record = dfilter(record, [nested_path])
+            flattened = flatten(record[nested_path])
 
-    yield obj
-
-
-def json2rows(src, path):
-    obj = {}
-    for i in flatten(src, sep='-'):
-        for k,v in i.items():
-            index = "-".join(re.findall(r'\d+', k))
-            split_key = re.split(r'\d+-', k)
-            depth = len(split_key) - 1
-            new_key = "".join(split_key)
-            if new_key not in path['blacklist']:
-                if new_key in path['change']:
-                    new_key = path['change'][new_key]
-                if depth in obj and index in obj[depth]:
-                    obj[depth][index] = {**obj[depth][index], **{new_key: v}}
-                elif depth in obj:
-                    obj[depth][index] = {new_key: v}
-                else:
-                    obj[depth] = {}
-                    obj[depth][index] = {new_key: v}
-
-    keys = obj.keys()
-    if len(keys) > 0:
-        for index in obj[max(keys)].keys():
-            accumulator = ''
-            row = {}
-            for pos, num in enumerate(index.split('-')):
-                pos += 1
-                if pos == 1:
-                    accumulator += num
-                else:
-                    accumulator += '-' + num
-
-                row = {**row, **obj[pos][accumulator]}
-            yield row
+            for key, group in groupby(flattened, keyfunc):
+                new_record = {re.sub(r"\d+-", "", k): v for k, v in group}
+                combined = {**new_record, **reference_record}
+                clean_record = dfilter(combined, blacklist)
+                yield {change.get(k, k): v for k, v in clean_record.items()}
+        else:
+            clean_record = dfilter(record, blacklist)
+            yield {change.get(k, k): v for k, v in clean_record.items()}
 
 
-def read_json(src, path):
-    data = loads(src)
-    # TODO: this could be more resilient
-    for key in path.split('.'):
-        data = data[key] if key in data else {}
-    yield data
-
-
-def json2csvs(src, report_type):
+def gen_csvs(src, report_type):
     if isinstance(src, str):
-        paths = COVID_CSV_PATHS[report_type]
-        for path in paths:
-            gen_records = read_zipcodes if report_type == 'zip' else read_json
-            records = gen_records(src, path=path['path'])
-            rows_gen = json2rows(records, path)
+        config = REPORTS[report_type]
+
+        for options in config["csv_options"]:
+            path = options["path"]
+            paths = path.split(".[].")
+            records = gen_records(src, *paths, **options)
+
             try:
-                _csv_report = records2csv(rows_gen)
-                csv_report = _csv_report.read()
-            except StopIteration as err:
-                csv_report = ''
-                # if a generator is empty, that means there was no data for the given path
-                print(f"records2csv function Runtime Error: {err}")
-            yield {
-                'src': csv_report,
-                'filename': f'{report_type}.{path["path"]}'
+                src = records2csv(records).read()
+            except StopIteration:
+                pass
+            else:
+                yield {"src": src, "suffix": f"{report_type}.{paths[-1]}"}
+
+
+def get_ckan_upload_config(basename, suffix="", src=None, ext="json", **kwargs):
+    filename = f"{basename}-{suffix}.{ext}" if suffix else f"{basename}.{ext}"
+    return {"src": src, "filename": filename, "mimetype": CTYPES[ext]}
+
+
+def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwargs):
+    response = None
+
+    try:
+        report = next(gen_ckan_reports(filename))
+    except StopIteration:
+        report = {}
+
+    action = "updated" if report else "created"
+    is_update = action == "updated"
+
+    if overwrite and is_update:
+        message = "The update function might not have worked. See Github Issue "
+        message += "https://github.com/openpeoria/covid-19-il-data-scraper/issues/12"
+        logger.warning(message)
+        post_data = {
+            "headers": CKAN_HEADERS,
+            "url": f"{CKAN_API_BASE_URL}/resource_update",
+            "data": {"id": report["id"]},
+        }
+    elif is_update:
+        response = get_error_resp(f"{filename} already exists!")
+    else:
+        # setup post_data for creating new resource
+        # docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create
+        post_data = {
+            "headers": CKAN_HEADERS,
+            "url": f"{CKAN_API_BASE_URL}/resource_create",
+            "data": {
+                "package_id": kwargs["package_id"],
+                "mimetype": kwargs["mimetype"],
+                "format": kwargs["mimetype"],
+                "name": filename,
+            },
+            "files": [("upload", src)],
+        }
+
+    if not response:
+        r = requests.post(**post_data)
+
+        try:
+            json = r.json()
+        except JSONDecodeError:
+            json = {}
+
+        if r.ok:
+            result = json["result"]
+
+            response = {
+                "ok": True,
+                "message": f"Successfully {action} {filename}!",
+                "last_modified": result.get("last_modified"),
+                "content_length": result.get("content_length"),
+                "status_code": r.status_code,
             }
+        else:
+            error = json.get("error", r.text)
+            response = get_error_resp(error)
+
+    return response
 
 
-def prep_for_upload(csvs, base_filename):
-    for src in csvs:
-        if src['src']:
-            yield {
-                'src': src['src'],
-                'filename': f"{base_filename.replace('.json', '')}-{src['filename']}.csv",
-                'mimetype': 'text/csv',
-            }
-
-
-def save_ckan_report(src, report_date, **kwargs):
+def post_ckan_reports(src, report_date, **kwargs):
     report_type = kwargs["report_type"]
-    config = REPORT_CONFIGS[report_type]
-    filename = config["filename"].format(report_date)
-    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
-    src_csvs = json2csvs(src, report_type)
-    csv_items = prep_for_upload(src_csvs, filename)
-    json_item = [{
-        'src': src,
-        'filename': filename,
-        'mimetype': 'application/json'
-    }]
-    responses = {}
+    config = REPORTS[report_type]
+    basename = config["basename"].format(report_date)
+    csvs = gen_csvs(src, report_type)
+    items = [get_ckan_upload_config(basename, ext="csv", **csv) for csv in csvs]
+    items.append(get_ckan_upload_config(basename, src=src))
 
     # this only works for the first date if the source isn't s3
     # because the data is less detailed on other days
-    for item in json_item + list(csv_items):
-        # check for data before uploading it
-        response = None
-        r = requests.post(
-            # resource_search by name matches any files that have
-            # the {filename} in the file name (not an exact match)
-            f"{CKAN_API_BASE_URL}/resource_search",
-            data={"query": f"name:{item['filename']}"},
-            headers=headers,
-        )
-        json = r.json()
+    responses = [
+        post_ckan_report(report_date, **kwargs, **config, **item) for item in items
+    ]
 
-        action = 'updated' if json['result']['count'] else 'created'
-        overwrite = kwargs.get('overwrite')
-        is_update = action == 'updated'
+    ok = all(r["ok"] for r in responses)
 
-        if overwrite and is_update:
-            # setup post_data for updating new resource
-            logger.warning("The update function might not have worked. See Github Issue at https://github.com/openpeoria/covid-19-il-data-scraper/issues/12")
-            post_data = {
-                "url": CKAN_API_BASE_URL + '/resource_update',
-                "data": {"id": json['result']['results'][0]['id']}
-            }
-        elif is_update:
-            response = get_error_resp(f"{item['filename']} already exists!")
-        else:
-            # setup post_data for creating new resource
-            # (https://docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create)
-            post_data = {
-                "url": CKAN_API_BASE_URL + '/resource_create',
-                "data": {
-                    "package_id": config["package_id"],
-                    "mimetype": item['mimetype'],
-                    "format": item['mimetype'],
-                    "name": item['filename'],
-                },
-                "files": [('upload', item['src'])]
-            }
+    if ok:
+        message = f"Successfully posted data for date {report_date}!"
+        status_code = 200
+    else:
+        message = f"Error(s) encountered posting data for date {report_date}!"
+        status_code = 500
 
-        if not response:
-            # upload data
-            post_data['headers'] = headers
-            r = requests.post(**post_data)
-            json = r.json()
-            if r.ok:
-                response = {
-                    "ok": True,
-                    "message": f"Successfully {action} {item['filename']}!",
-                    "last_modified": json['result'].get("last_modified"),
-                    # TODO: should I use name here?
-                    "etag": json['result'].get("name", "").strip('"'),
-                    "content_length": json['result'].get("content_length"),
-                    "status_code": r.status_code,
-                }
-            else:
-                response = get_error_resp(json)
+        for response in responses:
+            if not response["ok"]:
+                log(**response)
 
-        _filename_chunk = re.search(r'-(.+\.\w+$)', item['filename'])
-        if _filename_chunk:
-            filename_chunk = _filename_chunk[1]
-        else:
-            filename_chunk = f"{report_type}.json"
-
-        responses[filename_chunk] = response
-
-    return responses
+    return {
+        "ok": ok,
+        "message": message,
+        "result": responses,
+        "status_code": status_code,
+    }
 
 
-def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
+def post_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
-    filename = config["filename"].format(report_date)
+    basename = config["basename"].format(report_date)
+    filename = f"{basename}.json"
 
     try:
         bucket = s3_resource.Bucket(bucket_name)
@@ -414,9 +389,10 @@ def save_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     return response
 
 
-def save_local_report(src, report_date, report_type=None, **kwargs):
+def post_local_report(src, report_date, report_type=None, **kwargs):
     config = REPORTS[report_type]
-    filename = config["filename"].format(report_date)
+    basename = config["basename"].format(report_date)
+    filename = f"{basename}.json"
 
     with open(filename, mode="wb") as dest:
         try:
@@ -439,21 +415,22 @@ def get_3s_report(report_date, bucket_name=S3_BUCKET, **kwargs):
     f = BytesIO()
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
-    filename = config["filename"].format(report_date)
+    basename = config["basename"].format(report_date)
+    filename = f"{basename}.json"
 
     try:
         s3_client.download_fileobj(bucket_name, filename, f)
-    except ClientError as e:
-        resp = {}
+    except ClientError:
+        report = {}
     else:
         f.seek(0)
 
         try:
-            resp = load(f)
-        except JSONDecodeError as e:
-            resp = {}
+            report = load(f)
+        except JSONDecodeError:
+            report = {}
 
-    return resp
+    return report
 
 
 def parse_idph_county_report(requested_date, last_updated, **json):
@@ -461,6 +438,7 @@ def parse_idph_county_report(requested_date, last_updated, **json):
     date_format = config["date_format"]
 
     historical_county_values = json["historical_county"]["values"]
+    state_testing_values = json["state_testing_results"]["values"]
     test_dates = sorted(v["testDate"] for v in historical_county_values)
     earliest_updated = dt.strptime(test_dates[0], date_format)
 
@@ -468,12 +446,15 @@ def parse_idph_county_report(requested_date, last_updated, **json):
         padded_date_key = requested_date.strftime(date_format)
         date_key = padded_date_key.lstrip("0").replace("/0", "/")
         historical_county = {
-            v["testDate"]: v["values"] for v in historical_county_values
+            v["testDate"]: v["values"]
+            for v in historical_county_values
+            if "testDate" in v
         }
-        state_testing_results = filter(lambda x: True if 'testDate' in x else False, json["state_testing_results"]["values"])
+
         historical_state = {
-            v["testDate"]: v for v in state_testing_results
+            v["testDate"]: v for v in state_testing_values if "testDate" in v
         }
+
         county = historical_county.get(date_key, {})
         state = historical_state.get(date_key, {})
 
@@ -482,11 +463,11 @@ def parse_idph_county_report(requested_date, last_updated, **json):
         else:
             demographics = {}
 
-        resp = {"county": county, "state": state, "demographics": demographics}
+        report = {"county": county, "state": state, "demographics": demographics}
     else:
-        resp = {}
+        report = {}
 
-    return resp
+    return report
 
 
 def parse_idph_hospital_report(requested_date, last_updated, **json):
@@ -510,20 +491,15 @@ def parse_idph_hospital_report(requested_date, last_updated, **json):
             state = historical_hospital.get(date_key, {})
             region = {}
 
-        resp = {"state": state, "region": region}
+        report = {"state": state, "region": region}
     else:
-        resp = {}
+        report = {}
 
-    return resp
+    return report
 
 
 def parse_idph_zip_report(requested_date, last_updated, **json):
-    if last_updated == requested_date:
-        resp = {"zipcodes": json["zip_values"]}
-    else:
-        resp = {}
-
-    return resp
+    return {"zipcodes": json["zip_values"]} if last_updated == requested_date else {}
 
 
 PARSERS = {
@@ -534,52 +510,57 @@ PARSERS = {
 
 
 # TODO: change report to report_id
-def remove_ckan_report(report_date, report, report_type, **kwargs):
-    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
+def delete_ckan_report(report_date, report, report_type, **kwargs):
     r = requests.post(
         f"{CKAN_API_BASE_URL}/resource_delete",
-        data={"id": report['id']},
-        headers=headers,
+        data={"id": report["id"]},
+        headers=CKAN_HEADERS,
     )
+
+    report_name = report["name"]
+
     if r.ok:
         response = {
             "ok": True,
-            "message": f"Successfully deleted {report['name']}!",
+            "message": f"Successfully deleted {report_name}!",
             "last_modified": report.get("last_modified"),
             "etag": report.get("name", "").strip('"'),
             "content_length": report.get("content_length"),
             "status_code": r.status_code,
         }
     else:
-        response = get_error_resp(f"Failed to delete file {report['name']} from ckan. ERROR: {r.text}")
+        try:
+            error = r.json()["error"]
+        except JSONDecodeError:
+            error = r.text
+
+        message = f"Failed to delete file {report_name} from ckan. ERROR: {error}"
+        response = get_error_resp(message)
 
     return response
 
 
-def get_ckan_reports(report_date, report_type, **kwargs):
-    headers = {"X-CKAN-API-Key": CKAN_API_KEY}
-    config = REPORT_CONFIGS[report_type]
-    json_name = config["filename"].format(report_date)
-    csv_name = json_name.replace('.json', '-')
-    responses = []
-    for name in [json_name, csv_name]:
-        r = requests.post(
-            # resource_search by name matches any files that have
-            # the {filename} in the file name (not an exact match)
-            f"{CKAN_API_BASE_URL}/resource_search",
-            data={"query": f"name:{name}"},
-            headers=headers,
-        )
+def gen_ckan_reports(name):
+    r = requests.post(
+        # resource_search by name matches any files that contain the query string
+        # in the file name (not an exact match)
+        f"{CKAN_API_BASE_URL}/resource_search",
+        data={"query": f"name:{name}"},
+        headers=CKAN_HEADERS,
+    )
 
-        try:
-            json = r.json()
-        except JSONDecodeError:
-            json = {}
+    try:
+        json = r.json()
+    except JSONDecodeError:
+        pass
+    else:
+        yield from json.get("result", {}).get("results", [])
 
-        if 'result' in json and json['result']['count']:
-            responses += json['result']['results']
 
-    return responses
+def get_ckan_reports(report_date, report_type="", **kwargs):
+    config = REPORTS[report_type]
+    basename = config["basename"].format(report_date)
+    return list(gen_ckan_reports(basename))
 
 
 def get_idph_report(report_date, **kwargs):
@@ -591,55 +572,53 @@ def get_idph_report(report_date, **kwargs):
     try:
         json = r.json()
     except JSONDecodeError:
-        resp = {}
+        report = {}
     else:
         requested_date = dt.strptime(report_date, S3_DATE_FORMAT)
         last_updated = dt(**json["LastUpdateDate"])
         parse = PARSERS[report_type]
-        resp = parse(requested_date, last_updated, **json)
+        report = parse(requested_date, last_updated, **json)
 
-    return resp
+    return report
 
 
 REPORT_FUNCS = {
-    ('s3', "get", "county"): partial(get_3s_report, report_type="county"),
-    ('s3', "get", "zip"): partial(get_3s_report, report_type="zip"),
-    ('s3', "get", "hospital"): partial(get_3s_report, report_type="hospital"),
-    ('idph', "get", "county"): partial(get_idph_report, report_type="county"),
-    ('idph', "get", "zip"): partial(get_idph_report, report_type="zip"),
-    ('idph', "get", "hospital"): partial(get_idph_report, report_type="hospital"),
-    ('ckan', "get", "county"): partial(get_ckan_reports, report_type="county"),
-    ('ckan', "get", "zip"): partial(get_ckan_reports, report_type="zip"),
-    ('ckan', "get", "hospital"): partial(get_ckan_reports, report_type="hospital"),
-
-    ('s3', "save", "county"): partial(save_3s_report, report_type="county"),
-    ('s3', "save", "zip"): partial(save_3s_report, report_type="zip"),
-    ('s3', "save", "hospital"): partial(save_3s_report, report_type="hospital"),
-    ('local', "save", "county"): partial(save_local_report, report_type="county"),
-    ('local', "save", "zip"): partial(save_local_report, report_type="zip"),
-    ('local', "save", "hospital"): partial(save_local_report, report_type="hospital"),
-    ('ckan', "save", "county"): partial(save_ckan_report, report_type="county"),
-    ('ckan', "save", "zip"): partial(save_ckan_report, report_type="zip"),
-    ('ckan', "save", "hospital"): partial(save_ckan_report, report_type="hospital"),
-
-    ('ckan', "remove", "county"): partial(remove_ckan_report, report_type="county"),
-    ('ckan', "remove", "zip"): partial(remove_ckan_report, report_type="zip"),
-    ('ckan', "remove", "hospital"): partial(remove_ckan_report, report_type="hospital"),
+    ("s3", "get", "county"): partial(get_3s_report, report_type="county"),
+    ("s3", "get", "zip"): partial(get_3s_report, report_type="zip"),
+    ("s3", "get", "hospital"): partial(get_3s_report, report_type="hospital"),
+    ("idph", "get", "county"): partial(get_idph_report, report_type="county"),
+    ("idph", "get", "zip"): partial(get_idph_report, report_type="zip"),
+    ("idph", "get", "hospital"): partial(get_idph_report, report_type="hospital"),
+    ("ckan", "get", "county"): partial(get_ckan_reports, report_type="county"),
+    ("ckan", "get", "zip"): partial(get_ckan_reports, report_type="zip"),
+    ("ckan", "get", "hospital"): partial(get_ckan_reports, report_type="hospital"),
+    ("s3", "post", "county"): partial(post_3s_report, report_type="county"),
+    ("s3", "post", "zip"): partial(post_3s_report, report_type="zip"),
+    ("s3", "post", "hospital"): partial(post_3s_report, report_type="hospital"),
+    ("local", "post", "county"): partial(post_local_report, report_type="county"),
+    ("local", "post", "zip"): partial(post_local_report, report_type="zip"),
+    ("local", "post", "hospital"): partial(post_local_report, report_type="hospital"),
+    ("ckan", "post", "county"): partial(post_ckan_reports, report_type="county"),
+    ("ckan", "post", "zip"): partial(post_ckan_reports, report_type="zip"),
+    ("ckan", "post", "hospital"): partial(post_ckan_reports, report_type="hospital"),
+    ("ckan", "delete", "county"): partial(delete_ckan_report, report_type="county"),
+    ("ckan", "delete", "zip"): partial(delete_ckan_report, report_type="zip"),
+    ("ckan", "delete", "hospital"): partial(delete_ckan_report, report_type="hospital"),
 }
 
 
 # get_report function returns multiple reports when src='ckan'
-def get_report(report_date, src='idph', report_type="county", **kwargs):
+def get_report(report_date, src="idph", report_type="county", **kwargs):
     report_func = REPORT_FUNCS[(src, "get", report_type)]
     return report_func(report_date, **kwargs)
 
 
-def remove_report(report, report_date, report_type="county", src='idph', **kwargs):
-    report_func = REPORT_FUNCS[(src, "remove", report_type)]
+def delete_report(report, report_date, report_type="county", src="idph", **kwargs):
+    report_func = REPORT_FUNCS[(src, "delete", report_type)]
     return report_func(report_date, report, **kwargs)
 
 
-def save_report(report, report_date, report_type="county", **kwargs):
+def post_report(report, report_date, report_type="county", **kwargs):
     src = BytesIO()
 
     if report:
@@ -659,52 +638,51 @@ def save_report(report, report_date, report_type="county", **kwargs):
     src.seek(0)
 
     if src_pos:
-        dest = kwargs.get('dest', 'local')
-        src = data if dest == 'ckan' else src
-        report_func = REPORT_FUNCS[(dest, "save", report_type)]
+        dest = kwargs.get("dest", "local")
+        src = data if dest == "ckan" else src
+        report_func = REPORT_FUNCS[(dest, "post", report_type)]
         response = report_func(src, report_date, **kwargs)
 
     return response
 
 
-def save_report_by_id(job_id, report_date, **kwargs):
+def post_report_by_id(job_id, report_date, **kwargs):
     job = q.fetch_job(job_id)
 
     if job and job.get_status() == "finished":
-        response = save_report(job.result, report_date, **kwargs)
+        response = post_report(job.result, report_date, **kwargs)
     else:
         response = get_job_result(job)
 
     return response
 
 
-def enqueue_work(report_date, **kwargs):
-    _job = q.enqueue(get_report, report_date, **kwargs)
-    job = q.enqueue(save_report_by_id, _job.id, report_date, depends_on=_job, **kwargs)
-    return get_job_result(job)
-
-
-def fetch_report(report_date, enqueue=False, **kwargs):
+def add_report(report_date, enqueue=False, source="idph", **kwargs):
     if enqueue:
-        response = enqueue_work(report_date, **kwargs)
+        _job = q.enqueue(get_report, report_date, src=source, **kwargs)
+        job = q.enqueue(
+            post_report_by_id, _job.id, report_date, depends_on=_job, **kwargs
+        )
+        response = get_job_result(job)
     else:
-        source = kwargs.get('source', 'idph')
         report = get_report(report_date, src=source, **kwargs)
-        return save_report(report, report_date, **kwargs)
+        response = post_report(report, report_date, **kwargs)
+
+    return response
 
 
-def load_report(report_date, enqueue=False, **kwargs):
+def load_report(report_date, enqueue=False, source="s3", **kwargs):
     if enqueue:
-        job = q.enqueue(get_report, report_date, src='s3', **kwargs)
-        resp = get_job_result(job)
-        json = resp["result"]
+        job = q.enqueue(get_report, report_date, src=source, **kwargs)
+        _response = get_job_result(job)
+        report = _response["result"]
     else:
-        json = get_report(report_date, src='s3', **kwargs)
+        report = get_report(report_date, src=source, **kwargs)
 
-    if json:
+    if report:
         response = {
             "message": f"Successfully found data for date {report_date}!",
-            "result": json,
+            "result": report,
         }
     else:
         response = get_error_resp(f"No data found for date {report_date}.")
@@ -712,25 +690,35 @@ def load_report(report_date, enqueue=False, **kwargs):
     return response
 
 
-def delete_report(report_date, enqueue=False, **kwargs):
-    if enqueue:
-        pass
-    #     response = enqueue_work(report_date, **kwargs)
-    else:
-        src = kwargs.get('source', 'idph')
-        json = {}
-        if src == 'ckan':
-            reports = get_report(report_date, src, **kwargs)
-            if reports:
-                for report in reports:
-                    json[report['name']] = remove_report(report, report_date, src=src, **kwargs)
-            else:
-                json['error'] = get_error_resp(f'No reports were found with date="{report_date}""')
-        else:
-            report = get_report(report_date, src, **kwargs)
-            json['report'] = remove_report(report, report_date, src=src, **kwargs)
+def remove_report(report_date, enqueue=False, source="idph", **kwargs):
+    report = {} if enqueue else get_report(report_date, src=source, **kwargs)
+    ckan_src = source == "ckan"
 
-        return json
+    if report and ckan_src:
+        results = [delete_report(r, report_date, src=source, **kwargs) for r in report]
+        ok = all(r["ok"] for r in results)
+
+        if ok:
+            message = f"Successfully removed data for date {report_date}!"
+            status_code = 200
+        else:
+            message = f"Error(s) encountered removing data for date {report_date}!"
+            status_code = 500
+
+        response = {
+            "ok": ok,
+            "message": message,
+            "result": {r["name"]: r for r in results},
+            "status_code": status_code,
+        }
+    elif report:
+        response = delete_report(report, report_date, src=source, **kwargs)
+    elif enqueue:
+        response = get_error_resp("Enqueuing is not yet enabled for this action!")
+    else:
+        response = get_error_resp(f"No reports found for date {report_date}.")
+
+    return response
 
 
 def get_status(use_s3=True, **kwargs):
@@ -829,10 +817,25 @@ class Report(MethodView):
         for day in range(self.days):
             start_date = self.end_date - timedelta(days=day)
             report_date = start_date.strftime(S3_DATE_FORMAT)
-            json = fetch_report(report_date, **self.kwargs)
-            result[report_date] = {**json}
+            _response = add_report(report_date, **self.kwargs)
+            result[report_date] = {**_response}
 
-        response = {'result': result}
+        ok = all(r["ok"] for r in result.values())
+
+        if ok:
+            message = f"Successfully posted data for date {report_date}!"
+            status_code = 200
+        else:
+            message = f"Error(s) encountered posting data for date {report_date}!"
+            status_code = 500
+
+        response = {
+            "ok": ok,
+            "message": message,
+            "result": result,
+            "status_code": status_code,
+        }
+
         return jsonify(**response)
 
     def get(self):
@@ -842,13 +845,26 @@ class Report(MethodView):
         for day in range(self.days):
             start_date = self.end_date - timedelta(days=day)
             report_date = start_date.strftime(S3_DATE_FORMAT)
-            response = load_report(report_date, **self.kwargs)
-            json = response.get("result")
+            _response = load_report(report_date, **self.kwargs)
+            _result = _response.get("result")
 
-            if json:
-                result[report_date] = json
+            if _result:
+                result[report_date] = _result
 
-        response["result"] = result
+        if result:
+            message = f"Successfully got data for date {report_date}!"
+            status_code = 200
+        else:
+            message = f"Error(s) encountered getting data for date {report_date}!"
+            status_code = 500
+
+        response = {
+            "ok": bool(result),
+            "message": message,
+            "result": result,
+            "status_code": status_code,
+        }
+
         return jsonify(**response)
 
     def delete(self):
@@ -858,10 +874,25 @@ class Report(MethodView):
         for day in range(self.days):
             start_date = self.end_date - timedelta(days=day)
             report_date = start_date.strftime(S3_DATE_FORMAT)
-            json = delete_report(report_date, **self.kwargs)
-            result[report_date] = {**json}
+            _response = remove_report(report_date, **self.kwargs)
+            result[report_date] = {**_response}
 
-        response = {'result': result}
+        ok = all(r["ok"] for r in result.values())
+
+        if ok:
+            message = f"Successfully deleted data for date {report_date}!"
+            status_code = 200
+        else:
+            message = f"Error(s) encountered deleting data for date {report_date}!"
+            status_code = 500
+
+        response = {
+            "ok": ok,
+            "message": message,
+            "result": result,
+            "status_code": status_code,
+        }
+
         return jsonify(**response)
 
 
