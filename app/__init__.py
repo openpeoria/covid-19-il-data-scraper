@@ -28,7 +28,7 @@ from app.helpers import email_hdlr, flask_formatter
 from mezmorize.utils import get_cache_config, get_cache_type
 from meza.fntools import CustomEncoder
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __title__ = "COVID19 IL Data API"
 __package_name__ = config.__APP_NAME__
 __author__ = config.__AUTHOR__
