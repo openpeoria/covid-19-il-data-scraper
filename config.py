@@ -141,7 +141,7 @@ class Config(object):
                 {
                     "path": "demographics.age",
                     "nested_path": "demographics",
-                    "blacklist": ["count", "tested", "deaths", "race-color",],
+                    "blacklist": ["count", "tested", "deaths", "race-color"],
                     "change": {"race-count": "race-confirmed_cases"},
                 },
                 {

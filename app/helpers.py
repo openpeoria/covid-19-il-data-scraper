@@ -9,7 +9,7 @@ import pdb
 
 from inspect import getmembers, isclass
 from os import getenv
-from traceback import print_exception, format_exc
+from traceback import format_exc
 from json.decoder import JSONDecodeError
 from logging import Formatter
 

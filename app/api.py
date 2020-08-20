@@ -14,7 +14,7 @@ from functools import partial
 from io import BytesIO
 from shutil import copyfileobj
 from datetime import datetime as dt, date, timedelta
-from itertools import chain, groupby
+from itertools import groupby
 
 import requests
 import inflect
