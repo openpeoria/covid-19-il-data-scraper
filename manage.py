@@ -270,7 +270,7 @@ def load_reports(end, days, enqueue, **kwargs):
     choices=["county", "zip", "hospital"],
 )
 def status(source, **kwargs):
-    """Fetch IDPH reports save to disk"""
+    """Get IDPH reports status"""
     with app.app_context():
         use_s3 = source == "s3"
 
