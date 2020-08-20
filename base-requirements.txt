@@ -15,3 +15,4 @@ pylibmc==1.5.2
 rq-dashboard==0.6.1
 boto3==1.12.30
 inflect==4.1.0
+python-dotenv>=0.14.0,<=1.0.0
