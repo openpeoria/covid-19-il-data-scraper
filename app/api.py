@@ -541,11 +541,11 @@ def delete_ckan_report(report_date, report, report_type, **kwargs):
 
 
 def gen_ckan_reports(name):
-    r = requests.post(
-        # resource_search by name matches any files that contain the query string
-        # in the file name (not an exact match)
+    # resource_search by name matches any files that contain the query string
+    # in the file name (not an exact match)
+    r = requests.get(
         f"{CKAN_API_BASE_URL}/resource_search",
-        data={"query": f"name:{name}"},
+        params={"query": f"name:{name}"},
         headers=CKAN_HEADERS,
     )
 
