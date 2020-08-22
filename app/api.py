@@ -243,13 +243,13 @@ def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwar
     is_update = action == "updated"
 
     if overwrite and is_update:
-        message = "The update function might not have worked. See Github Issue "
-        message += "https://github.com/openpeoria/covid-19-il-data-scraper/issues/12"
-        logger.warning(message)
+        # docs.ckan.org/en/2.8/api/#uploading-a-new-version-of-a-resource-file
+        # docs.ckan.org/en/2.8/maintaining/filestore.html#filestore-api
         post_data = {
             "headers": CKAN_HEADERS,
             "url": f"{CKAN_API_BASE_URL}/resource_update",
             "data": {"id": report["id"]},
+            "files": [("upload", src)],
         }
     elif is_update:
         response = get_error_resp(f"{filename} already exists!")
