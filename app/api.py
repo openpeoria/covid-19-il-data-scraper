@@ -14,12 +14,11 @@ from functools import partial
 from io import BytesIO
 from shutil import copyfileobj
 from datetime import datetime as dt, date, timedelta
-from itertools import groupby
+from itertools import groupby, chain
 
 import requests
 import inflect
 import boto3
-import pygogo as gogo
 
 from botocore.exceptions import ClientError, WaiterError, ProfileNotFound
 
@@ -48,6 +47,7 @@ from app.utils import (
 )
 from app.connection import conn
 
+from meza import process as pr
 from meza.convert import records2csv
 from meza.fntools import dfilter
 from riko.dotdict import DotDict
@@ -72,7 +72,6 @@ except ProfileNotFound:
 
 s3_client = session.client("s3")
 s3_resource = session.resource("s3")
-logger = gogo.Gogo(__name__, monolog=True).logger
 
 # these don't change based on mode, so no need to do app.config['...']
 PREFIX = Config.API_URL_PREFIX
@@ -172,27 +171,31 @@ def flatten(record, *keys, sep="-"):
         yield (sep.join(keys), record)
 
 
-def gen_records(src, *paths, blacklist=None, change=None, nested_path="", **kwargs):
+def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
     data = DotDict(loads(src))
-    change = change or {}
+    change = kwargs.get("change") or {}
+    nested_path = kwargs.get("nested_path", "")
+    report_datetime = dt.strptime(report_date, S3_DATE_FORMAT)
 
     try:
         path, subpath = paths
     except ValueError:
         path, subpath = paths[0], None
 
-    for record in data[path]:
+    for record in data.get(path, []):
+        record["date"] = report_datetime.isoformat()
+
         if subpath:
             if "." in subpath:
                 subpath_0, subpath_1 = subpath.split(".", maxsplit=1)
                 reference_record = dfilter(record, blacklist + [subpath_0])
-                reference_record[subpath_0] = subpath_1
             else:
                 reference_record = dfilter(record, blacklist + [subpath])
 
             for new_record in DotDict(record)[subpath]:
                 combined = {**new_record, **reference_record}
-                yield {change.get(k, k): v for k, v in combined.items()}
+                clean_record = dfilter(combined, blacklist)
+                yield {change.get(k, k): v for k, v in clean_record.items()}
         elif nested_path:
             # key is like 'race-7-description'
             keyfunc = lambda x: "-".join(re.findall(r"\d+", x[0]))
@@ -209,37 +212,51 @@ def gen_records(src, *paths, blacklist=None, change=None, nested_path="", **kwar
             yield {change.get(k, k): v for k, v in clean_record.items()}
 
 
-def gen_csvs(src, report_type):
-    if isinstance(src, str):
-        config = REPORTS[report_type]
+def gen_csvs(src, report_date, report_type=None, **kwargs):
+    config = REPORTS[report_type]
 
-        for options in config["csv_options"]:
-            path = options["path"]
-            paths = path.split(".[].")
-            records = gen_records(src, *paths, **options)
+    for options in config["csv_options"]:
+        path = options["path"]
+        paths = path.split(".[].")
+        records = gen_records(src, *paths, report_date=report_date, **options)
+        records, peek = pr.peek(records)
+
+        if peek:
+            resource_id = options["resource_id"]
+            package_id = options["package_id"]
+            # datastore_upsert would be ideal, but not sure how to set the `key` without
+            # using datastore_create via API (as opposed to datapusher)
+            # also not sure if datapusher will activate on upserts
+            # docs.ckan.org/en/2.8/maintaining/datastore.html#ckanext.datastore.logic.action.datastore_upsert
+            report = gen_ckan_records_by_id(resource_id, report_date)
+            report, peek = pr.peek(report)
+            new = chain(report, records) if peek else records
 
             try:
-                src = records2csv(records).read()
-            except StopIteration:
-                pass
-            else:
-                yield {"src": src, "suffix": f"{report_type}.{paths[-1]}"}
+                yield (records2csv(new), resource_id, package_id)
+            except Exception as e:
+                app.logger.error(e)
 
 
-def get_ckan_upload_config(basename, suffix="", src=None, ext="json", **kwargs):
-    filename = f"{basename}-{suffix}.{ext}" if suffix else f"{basename}.{ext}"
-    return {"src": src, "filename": filename, "mimetype": CTYPES[ext]}
-
-
-def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwargs):
+def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
+    assert resource_id or filename
     response = None
 
-    try:
-        report = next(gen_ckan_reports(filename))
-    except StopIteration:
-        report = {}
+    if filename:
+        try:
+            report = next(gen_ckan_reports(filename))
+        except StopIteration:
+            report = {}
+        else:
+            resource_id = report["id"]
+            filename = report["name"]
 
-    action = "updated" if report else "created"
+        action = "updated" if report else "created"
+        overwrite = kwargs.get("overwrite")
+    else:
+        action = "updated"
+        overwrite = True
+
     is_update = action == "updated"
 
     if overwrite and is_update:
@@ -248,7 +265,7 @@ def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwar
         post_data = {
             "headers": CKAN_HEADERS,
             "url": f"{CKAN_API_BASE_URL}/resource_update",
-            "data": {"id": report["id"]},
+            "data": {"id": resource_id},
             "files": [("upload", src)],
         }
     elif is_update:
@@ -256,11 +273,12 @@ def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwar
     else:
         # setup post_data for creating new resource
         # docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create
+        # docs.ckan.org/en/2.8/maintaining/filestore.html#filestore-api
         post_data = {
             "headers": CKAN_HEADERS,
             "url": f"{CKAN_API_BASE_URL}/resource_create",
             "data": {
-                "package_id": kwargs["package_id"],
+                "package_id": package_id,
                 "mimetype": kwargs["mimetype"],
                 "format": kwargs["mimetype"],
                 "name": filename,
@@ -281,7 +299,7 @@ def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwar
 
             response = {
                 "ok": True,
-                "message": f"Successfully {action} {filename}!",
+                "message": f"Successfully {action} {filename or resource_id}!",
                 "last_modified": result.get("last_modified"),
                 "content_length": result.get("content_length"),
                 "status_code": r.status_code,
@@ -294,31 +312,30 @@ def post_ckan_report(report_date, src=None, filename="", overwrite=False, **kwar
 
 
 def post_ckan_reports(src, report_date, **kwargs):
+    mimetype = CTYPES["csv"]
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
-    basename = config["basename"].format(report_date)
-    csvs = gen_csvs(src, report_type)
-    items = [get_ckan_upload_config(basename, ext="csv", **csv) for csv in csvs]
-    items.append(get_ckan_upload_config(basename, src=src))
+    csvs = gen_csvs(src, report_date, **kwargs)
 
-    # this only works for the first date if the source isn't s3
-    # because the data is less detailed on other days
     responses = [
-        post_ckan_report(report_date, **kwargs, **config, **item) for item in items
+        post_ckan_report(*args, mimetype=mimetype, **kwargs, **config) for args in csvs
     ]
 
-    ok = all(r["ok"] for r in responses)
+    ok = responses and all(r["ok"] for r in responses)
 
     if ok:
         message = f"Successfully posted data for date {report_date}!"
         status_code = 200
-    else:
+    elif responses:
         message = f"Error(s) encountered posting data for date {report_date}!"
         status_code = 500
 
         for response in responses:
             if not response["ok"]:
                 log(**response)
+    else:
+        message = f"No data posted for date {report_date}!"
+        status_code = 500
 
     return {
         "ok": ok,
@@ -555,6 +572,40 @@ def gen_ckan_reports(name):
         pass
     else:
         yield from json.get("result", {}).get("results", [])
+
+
+def gen_ckan_records_by_id(resource_id, exclude_date, limit=4096, offset=0):
+    r = requests.get(
+        f"{CKAN_API_BASE_URL}/datastore_search",
+        params={"resource_id": resource_id, "limit": limit, "offset": offset},
+        headers=CKAN_HEADERS,
+    )
+
+    try:
+        json = r.json()
+    except JSONDecodeError:
+        json = {}
+
+    if r.ok:
+        # datastore converts date strings to datetime, so just go with it
+        exclude_datetime = dt.strptime(exclude_date, S3_DATE_FORMAT)
+        exclude_datetime_iso = exclude_datetime.isoformat()
+        result = json["result"]
+
+        for record in result["records"]:
+            if record.get("date") != exclude_datetime_iso:
+                yield dfilter(record, ["_id"])
+
+        total = result["total"]
+        offset += limit
+
+        if total > offset:
+            yield from gen_ckan_records_by_id(resource_id, exclude_date, limit, offset)
+    else:
+        # {'__type': 'Validation Error', 'resource_id': ['Missing value']}
+        error = json.get("error", {})
+        err_msg = ", ".join(f"{k}: {v}" for k, v in error.items() if k != "__type")
+        app.logger.error(err_msg)
 
 
 def get_ckan_reports(report_date, report_type="", **kwargs):
@@ -820,12 +871,12 @@ class Report(MethodView):
             _response = add_report(report_date, **self.kwargs)
             result[report_date] = {**_response}
 
-        ok = all(r["ok"] for r in result.values())
+        ok = result and all(r["ok"] for r in result.values())
 
         if ok:
             message = f"Successfully posted data for date {report_date}!"
             status_code = 200
-        else:
+        elif result:
             message = f"Error(s) encountered posting data for date {report_date}!"
             status_code = 500
 
