@@ -160,7 +160,7 @@ def require():
     default="county",
     choices=["county", "zip", "hospital"],
 )
-@manager.option("-e", "--enqueue", help="queue the work", action="store_true")
+@manager.option("-e", "--enqueue", help="Queue the work", action="store_true")
 def add_reports(end, days, enqueue, **kwargs):
     """Upload reports or save to disk"""
     with app.app_context():
@@ -202,7 +202,7 @@ def add_reports(end, days, enqueue, **kwargs):
     default="county",
     choices=["county", "zip", "hospital"],
 )
-@manager.option("-e", "--enqueue", help="queue the work", action="store_true")
+@manager.option("-e", "--enqueue", help="Queue the work", action="store_true")
 def remove_reports(end, days, enqueue, **kwargs):
     """Delete reports"""
     with app.app_context():
@@ -237,7 +237,7 @@ def remove_reports(end, days, enqueue, **kwargs):
     default="county",
     choices=["county", "zip", "hospital"],
 )
-@manager.option("-e", "--enqueue", help="queue the work", action="store_true")
+@manager.option("-e", "--enqueue", help="Queue the work", action="store_true")
 def load_reports(end, days, enqueue, **kwargs):
     """Fetch reports to return time series"""
     with app.app_context():
@@ -270,7 +270,7 @@ def load_reports(end, days, enqueue, **kwargs):
     choices=["county", "zip", "hospital"],
 )
 def status(source, **kwargs):
-    """Get IDPH reports status"""
+    """Get IDPH reports save to disk"""
     with app.app_context():
         use_s3 = source == "s3"
 
