@@ -239,6 +239,9 @@ class Config(object):
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
     ]
+    AWS_ACCESS_KEY_ID = getenv("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = getenv("AWS_SECRET_ACCESS_KEY")
+    AWS_REGION = getenv("AWS_REGION")
     S3_BUCKET = getenv("S3_BUCKET", "covid19-il")
 
     # RQ
