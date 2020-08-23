@@ -175,6 +175,13 @@ class Config(object):
             "basename": "IL_zip_COVID19_data_{}",
             "csv_options": [
                 {
+                    "path": "zipcodes",
+                    "blacklist": ["demographics"],
+                    "change": {"zip": "zip_code"},
+                    "resource_id": "05868207-2fed-40d2-a859-b9b2e98c77b0",
+                    "package_id": "illinois-covid19-cases-zip-code",
+                },
+                {
                     "path": "zipcodes.[].demographics.age",
                     "blacklist": ["confirmed_cases", "total_tested", "demographics"],
                     "change": {"count": "confirmed_cases", "zip": "zip_code"},
