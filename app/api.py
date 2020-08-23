@@ -200,13 +200,16 @@ def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
             # key is like 'race-7-description'
             keyfunc = lambda x: "-".join(re.findall(r"\d+", x[0]))
             reference_record = dfilter(record, [nested_path])
-            flattened = flatten(record[nested_path])
+            nested = record.get(nested_path)
 
-            for key, group in groupby(flattened, keyfunc):
-                new_record = {re.sub(r"\d+-", "", k): v for k, v in group}
-                combined = {**new_record, **reference_record}
-                clean_record = dfilter(combined, blacklist)
-                yield {change.get(k, k): v for k, v in clean_record.items()}
+            if nested:
+                flattened = flatten(nested)
+
+                for key, group in groupby(flattened, keyfunc):
+                    new_record = {re.sub(r"\d+-", "", k): v for k, v in group}
+                    combined = {**new_record, **reference_record}
+                    clean_record = dfilter(combined, blacklist)
+                    yield {change.get(k, k): v for k, v in clean_record.items()}
         else:
             clean_record = dfilter(record, blacklist)
             yield {change.get(k, k): v for k, v in clean_record.items()}
