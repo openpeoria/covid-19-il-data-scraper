@@ -213,6 +213,8 @@ def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
 
 
 def gen_csvs(src, report_date, report_type=None, **kwargs):
+    # The impedance mismatch (checking datastore but uploading to filestore) can
+    # lead to a race condition when looping over multiple dates
     config = REPORTS[report_type]
 
     for options in config["csv_options"]:
@@ -226,7 +228,7 @@ def gen_csvs(src, report_date, report_type=None, **kwargs):
             package_id = options["package_id"]
             # datastore_upsert would be ideal, but not sure how to set the `key` without
             # using datastore_create via API (as opposed to datapusher)
-            # also not sure if datapusher will activate on upserts
+            # also not sure if filestore will reflect the datastore
             # docs.ckan.org/en/2.8/maintaining/datastore.html#ckanext.datastore.logic.action.datastore_upsert
             report = gen_ckan_records_by_id(resource_id, report_date)
             report, peek = pr.peek(report)
