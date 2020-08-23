@@ -212,6 +212,25 @@ def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
             yield {change.get(k, k): v for k, v in clean_record.items()}
 
 
+def gen_new_records(src, report_date, report_type=None, **kwargs):
+    config = REPORTS[report_type]
+
+    for options in config["csv_options"]:
+        path = options["path"]
+        paths = path.split(".[].")
+        records = gen_records(src, *paths, report_date=report_date, **options)
+        records, peek = pr.peek(records)
+
+        if peek:
+            resource_id = options["resource_id"]
+            package_id = options["package_id"]
+            dates = get_ckan_report_dates_by_id(resource_id)
+            new = [r for r in records if r.get("date") not in dates]
+
+            if new:
+                yield (new, resource_id, package_id)
+
+
 def gen_csvs(src, report_date, report_type=None, **kwargs):
     # The impedance mismatch (checking datastore but uploading to filestore) can
     # lead to a race condition when looping over multiple dates
@@ -261,11 +280,21 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
 
     is_update = action == "updated"
 
-    if overwrite and is_update:
+    if kwargs.get("datastore"):
+        # docs.ckan.org/en/2.8/maintaining/datastore.html#ckanext.datastore.logic.action.datastore_upsert
+        post_data = {
+            "url": f"{CKAN_API_BASE_URL}/datastore_upsert",
+            "json": {
+                "resource_id": resource_id,
+                "method": "insert",
+                "records": src,
+                "force": True,
+            },
+        }
+    elif overwrite and is_update:
         # docs.ckan.org/en/2.8/api/#uploading-a-new-version-of-a-resource-file
         # docs.ckan.org/en/2.8/maintaining/filestore.html#filestore-api
         post_data = {
-            "headers": CKAN_HEADERS,
             "url": f"{CKAN_API_BASE_URL}/resource_update",
             "data": {"id": resource_id},
             "files": [("upload", src)],
@@ -277,7 +306,6 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
         # docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create
         # docs.ckan.org/en/2.8/maintaining/filestore.html#filestore-api
         post_data = {
-            "headers": CKAN_HEADERS,
             "url": f"{CKAN_API_BASE_URL}/resource_create",
             "data": {
                 "package_id": package_id,
@@ -289,7 +317,7 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
         }
 
     if not response:
-        r = requests.post(**post_data)
+        r = requests.post(headers=CKAN_HEADERS, **post_data)
 
         try:
             json = r.json()
@@ -317,10 +345,15 @@ def post_ckan_reports(src, report_date, **kwargs):
     mimetype = CTYPES["csv"]
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
-    csvs = gen_csvs(src, report_date, **kwargs)
+
+    if kwargs.get("datastore"):
+        sources = gen_new_records(src, report_date, **kwargs)
+    else:
+        sources = gen_csvs(src, report_date, **kwargs)
 
     responses = [
-        post_ckan_report(*args, mimetype=mimetype, **kwargs, **config) for args in csvs
+        post_ckan_report(*args, mimetype=mimetype, **kwargs, **config)
+        for args in sources
     ]
 
     ok = responses and all(r["ok"] for r in responses)
@@ -574,6 +607,28 @@ def gen_ckan_reports(name):
         pass
     else:
         yield from json.get("result", {}).get("results", [])
+
+
+def get_ckan_report_dates_by_id(resource_id):
+    r = requests.get(
+        f"{CKAN_API_BASE_URL}/datastore_search_sql",
+        params={"sql": f'SELECT DISTINCT date FROM "{resource_id}";'},
+        headers=CKAN_HEADERS,
+    )
+
+    try:
+        json = r.json()
+    except JSONDecodeError:
+        json = {}
+
+    if r.ok:
+        records = json["result"]["records"]
+        return {record["date"] for record in records}
+    else:
+        # {'__type': 'Validation Error', 'resource_id': ['Missing value']}
+        error = json.get("error", {})
+        err_msg = ", ".join(f"{k}: {v}" for k, v in error.items() if k != "__type")
+        app.logger.error(err_msg)
 
 
 def gen_ckan_records_by_id(resource_id, exclude_date, limit=4096, offset=0):

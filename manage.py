@@ -161,6 +161,12 @@ def require():
     choices=["county", "zip", "hospital"],
 )
 @manager.option("-e", "--enqueue", help="Queue the work", action="store_true")
+@manager.option(
+    "-a",
+    "--datastore",
+    help="Add via datastore instead of filestore",
+    action="store_true",
+)
 def add_reports(end, days, enqueue, **kwargs):
     """Upload reports or save to disk"""
     with app.app_context():
