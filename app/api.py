@@ -152,10 +152,10 @@ def get_job_result_by_id(job_id):
     return get_job_result(job)
 
 
-def get_error_resp(e, status_code=500):
+def get_response(msg, status_code=500):
     return {
-        "ok": False,
-        "message": str(e),
+        "ok": status_code < 400,
+        "message": str(msg),
         "status_code": status_code,
     }
 
@@ -303,7 +303,7 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
             "files": [("upload", src)],
         }
     elif is_update:
-        response = get_error_resp(f"{filename} already exists!")
+        response = get_response(f"{filename} already exists!", 409)
     else:
         # setup post_data for creating new resource
         # docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create
@@ -339,7 +339,7 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
             }
         else:
             error = json.get("error", r.text)
-            response = get_error_resp(error)
+            response = get_response(error)
 
     return response
 
@@ -392,7 +392,7 @@ def post_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     try:
         bucket = s3_resource.Bucket(bucket_name)
     except ClientError as e:
-        response = get_error_resp(e)
+        response = get_response(e)
         bucket = None
 
     try:
@@ -405,19 +405,19 @@ def post_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
     try:
         s3_obj = bucket.Object(filename)
     except ClientError as e:
-        response = get_error_resp(e)
+        response = get_response(e)
         s3_obj = None
     except AttributeError:
         s3_obj = None
 
     if etag and not kwargs.get("overwrite"):
-        response = get_error_resp(f"{filename} already exists!")
+        response = get_response(f"{filename} already exists!", 304)
         s3_obj = None
 
     try:
         s3_obj.upload_fileobj(src)
     except ClientError as e:
-        response = get_error_resp(e)
+        response = get_response(e)
     except AttributeError:
         pass
     else:
@@ -426,7 +426,7 @@ def post_3s_report(src, report_date, bucket_name=S3_BUCKET, **kwargs):
         except WaiterError as e:
             not_modified = "Not Modified" in str(e)
             status_code = 304 if not_modified else 500
-            response = get_error_resp(e, status_code)
+            response = get_response(e, status_code)
         else:
             head = s3_client.head_object(Bucket=bucket_name, Key=filename)
             meta = head["ResponseMetadata"]
@@ -453,7 +453,7 @@ def post_local_report(src, report_date, report_type=None, **kwargs):
         try:
             copyfileobj(src, dest)
         except Exception as e:
-            response = get_error_resp(e)
+            response = get_response(e)
         else:
             new_pos = dest.tell()
             response = {
@@ -590,7 +590,7 @@ def delete_ckan_report(report_date, report, report_type, **kwargs):
             error = r.text
 
         message = f"Failed to delete file {report_name} from ckan. ERROR: {error}"
-        response = get_error_resp(message)
+        response = get_response(message)
 
     return response
 
@@ -738,12 +738,12 @@ def post_report(report, report_date, report_type="county", **kwargs):
         try:
             data = dumps(report, **options)
         except Exception as e:
-            response = get_error_resp(e)
+            response = get_response(e)
         else:
-            response = get_error_resp(f"No data written for {report_date}.", 404)
+            response = get_response(f"No data written for {report_date}.", 404)
             src.write(data.encode("utf-8"))
     else:
-        response = get_error_resp(f"No data found for {report_date}.", 404)
+        response = get_response(f"No data found for {report_date}.", 304)
 
     src_pos = src.tell()
     src.seek(0)
@@ -796,7 +796,7 @@ def load_report(report_date, enqueue=False, source="s3", **kwargs):
             "result": report,
         }
     else:
-        response = get_error_resp(f"No data found for date {report_date}.")
+        response = get_response(f"No data found for date {report_date}.", 404)
 
     return response
 
@@ -825,9 +825,9 @@ def remove_report(report_date, enqueue=False, source="idph", **kwargs):
     elif report:
         response = delete_report(report, report_date, src=source, **kwargs)
     elif enqueue:
-        response = get_error_resp("Enqueuing is not yet enabled for this action!")
+        response = get_response("Enqueuing is not yet enabled for this action!", 501)
     else:
-        response = get_error_resp(f"No reports found for date {report_date}.")
+        response = get_response(f"No reports found for date {report_date}.", 404)
 
     return response
 
@@ -847,7 +847,7 @@ def get_status(use_s3=True, **kwargs):
             "status_code": status_code,
         }
     else:
-        response = {"ok": False, "message": "Not implemented!", "status_code": 501}
+        response = get_response("Not implemented!", 501)
 
     return response
 
