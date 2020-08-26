@@ -303,7 +303,7 @@ def post_ckan_report(src, resource_id, package_id, filename=None, **kwargs):
             "files": [("upload", src)],
         }
     elif is_update:
-        response = get_response(f"{filename} already exists!", 409)
+        response = get_response(f"{filename} already exists!", 304)
     else:
         # setup post_data for creating new resource
         # docs.ckan.org/en/2.8/api/index.html#ckan.logic.action.create.resource_create
@@ -372,8 +372,9 @@ def post_ckan_reports(src, report_date, **kwargs):
             if not response["ok"]:
                 log(**response)
     else:
+        ok = True
         message = f"No data posted for date {report_date}!"
-        status_code = 500
+        status_code = 304
 
     return {
         "ok": ok,
