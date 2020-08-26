@@ -125,7 +125,7 @@ class Config(object):
 
     # CKAN
     CKAN_API_KEY = getenv("CKAN_API_KEY")
-    CKAN_API_BASE_URL = "https://openpeoria.nerevu.com/api/3/action"
+    CKAN_API_BASE_URL = "https://data.openpeoria.com/api/3/action"
     REQUIRED_SETTINGS += ["CKAN_API_KEY"]
 
     # Data
