@@ -233,6 +233,27 @@ class Config(object):
                     "resource_id": "1d2052c1-1405-43fd-8fee-908e10884873",
                     "package_id": "illinois-regional-hospital-data",
                 },
+                {
+                    "path": "state",
+                    "listize": True,
+                    "blacklist": [
+                        "id",
+                        "reportDate",
+                        "TotalInUseBedsCOVID",
+                        "ICUInUseBedsNonCOVID",
+                        "VentilatorInUseNonCOVID",
+                        "TotalInUseBedsNonCOVID",
+                    ],
+                    "change": {
+                        "ICUInUseBedsCOVID": "ICUCovidPatients",
+                        "ICUBeds": "ICUCapacity",
+                        "VentilatorAvailable": "VentsAvailable",
+                        "VentilatorInUseCOVID": "VentilatorsInUseCOVID",
+                        "TotalOpenBeds": "TotalBedsAvailable",
+                    },
+                    "resource_id": "f679f8e2-90a0-451a-8808-89e5896a27c9",
+                    "package_id": "illinois-regional-hospital-data",
+                },
             ],
         },
     }

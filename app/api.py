@@ -182,7 +182,12 @@ def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
     except ValueError:
         path, subpath = paths[0], None
 
-    for record in data.get(path, []):
+    records = data.get(path, [])
+
+    if records and kwargs.get("listize"):
+        records = [records]
+
+    for record in records:
         record["date"] = report_datetime.isoformat()
 
         if subpath:
@@ -228,7 +233,11 @@ def gen_new_records(src, report_date, report_type=None, **kwargs):
             resource_id = options["resource_id"]
             package_id = options["package_id"]
             dates = get_ckan_report_dates_by_id(resource_id)
-            new = [r for r in records if r.get("date") not in dates]
+
+            if dates:
+                new = [r for r in records if r.get("date") not in dates]
+            else:
+                new = None
 
             if new:
                 yield (new, resource_id, package_id)
