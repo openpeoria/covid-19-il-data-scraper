@@ -503,8 +503,12 @@ def parse_idph_county_report(requested_date, last_updated, **json):
     date_format = config["date_format"]
 
     historical_county_values = json["historical_county"]["values"]
+    dated_historical_county_values = [
+        v for v in historical_county_values if "testDate" in v
+    ]
+
     state_testing_values = json["state_testing_results"]["values"]
-    test_dates = sorted(v["testDate"] for v in historical_county_values)
+    test_dates = sorted(v["testDate"] for v in dated_historical_county_values)
     earliest_updated = dt.strptime(test_dates[0], date_format)
 
     if last_updated >= requested_date >= earliest_updated:
@@ -512,8 +516,7 @@ def parse_idph_county_report(requested_date, last_updated, **json):
         date_key = padded_date_key.lstrip("0").replace("/0", "/")
         historical_county = {
             v["testDate"]: v["values"]
-            for v in historical_county_values
-            if "testDate" in v
+            for v in dated_historical_county_values
         }
 
         historical_state = {
