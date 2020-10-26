@@ -517,6 +517,7 @@ def parse_idph_county_report(requested_date, last_updated, **json):
         historical_county = {
             v["testDate"]: v["values"]
             for v in dated_historical_county_values
+            if v.get("values")
         }
 
         historical_state = {
