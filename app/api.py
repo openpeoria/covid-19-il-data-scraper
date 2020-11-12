@@ -733,6 +733,10 @@ REPORT_FUNCS = {
 }
 
 
+def get_report_phrase(report_date, report_type=None, **kwargs):
+    return f"for {report_type} report on {report_date}"
+
+
 # get_report function returns multiple reports when src='ckan'
 def get_report(report_date, src="idph", report_type="county", **kwargs):
     report_func = REPORT_FUNCS[(src, "get", report_type)]
@@ -745,6 +749,7 @@ def delete_report(report, report_date, report_type="county", src="idph", **kwarg
 
 
 def post_report(report, report_date, report_type="county", **kwargs):
+    report_phrase = get_report_phrase(report_date, report_type)
     src = BytesIO()
 
     if report:
@@ -755,10 +760,12 @@ def post_report(report, report_date, report_type="county", **kwargs):
         except Exception as e:
             response = get_response(e)
         else:
-            response = get_response(f"No data written for {report_date}.", 404)
+            message = f"No data written {report_phrase}."
+            response = get_response(message, 404)
             src.write(data.encode("utf-8"))
     else:
-        response = get_response(f"No data found for {report_date}.", 304)
+        message = f"No data found {report_phrase}."
+        response = get_response(message, 304)
 
     src_pos = src.tell()
     src.seek(0)
@@ -798,6 +805,8 @@ def add_report(report_date, enqueue=False, source="idph", **kwargs):
 
 
 def load_report(report_date, enqueue=False, source="s3", **kwargs):
+    report_phrase = get_report_phrase(report_date, **kwargs)
+
     if enqueue:
         job = q.enqueue(get_report, report_date, src=source, **kwargs)
         _response = get_job_result(job)
@@ -807,16 +816,17 @@ def load_report(report_date, enqueue=False, source="s3", **kwargs):
 
     if report:
         response = {
-            "message": f"Successfully found data for date {report_date}!",
+            "message": f"Successfully found data {report_phrase}!",
             "result": report,
         }
     else:
-        response = get_response(f"No data found for date {report_date}.", 404)
+        response = get_response(f"No data found {report_phrase}.", 404)
 
     return response
 
 
 def remove_report(report_date, enqueue=False, source="idph", **kwargs):
+    report_phrase = get_report_phrase(report_date, **kwargs)
     report = {} if enqueue else get_report(report_date, src=source, **kwargs)
     ckan_src = source == "ckan"
 
@@ -825,10 +835,10 @@ def remove_report(report_date, enqueue=False, source="idph", **kwargs):
         ok = all(r["ok"] for r in results)
 
         if ok:
-            message = f"Successfully removed data for date {report_date}!"
+            message = f"Successfully removed data {report_phrase}!"
             status_code = 200
         else:
-            message = f"Error(s) encountered removing data for date {report_date}!"
+            message = f"Error(s) encountered removing data {report_phrase}!"
             status_code = 500
 
         response = {
@@ -842,7 +852,7 @@ def remove_report(report_date, enqueue=False, source="idph", **kwargs):
     elif enqueue:
         response = get_response("Enqueuing is not yet enabled for this action!", 501)
     else:
-        response = get_response(f"No reports found for date {report_date}.", 404)
+        response = get_response(f"No reports found {report_phrase}.", 404)
 
     return response
 
