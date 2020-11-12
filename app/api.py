@@ -222,11 +222,16 @@ def gen_records(src, *paths, report_date=None, blacklist=None, **kwargs):
 
 def gen_new_records(src, report_date, report_type=None, **kwargs):
     config = REPORTS[report_type]
+    global_blacklist = config.get("blacklist") or []
 
     for options in config["csv_options"]:
+        blacklist = options.pop("blacklist", None) or []
         path = options["path"]
-        paths = path.split(".[].")
-        records = gen_records(src, *paths, report_date=report_date, **options)
+        ekwargs = {
+            "report_date": report_date,
+            "blacklist": blacklist + global_blacklist,
+        }
+        records = gen_records(src, *path.split(".[]."), **ekwargs, **options)
         records, peek = pr.peek(records)
 
         if peek:

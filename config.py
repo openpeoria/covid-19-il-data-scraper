@@ -135,6 +135,7 @@ class Config(object):
             "report_name": "COVIDHistoricalTestResults",
             "basename": "IL_county_COVID19_data_{}",
             "date_format": "%m/%d/%Y",
+            "blacklist": ["probable_deaths"],
             "csv_options": [
                 {
                     "path": "county",
@@ -173,6 +174,7 @@ class Config(object):
         "zip": {
             "report_name": "COVIDZip",
             "basename": "IL_zip_COVID19_data_{}",
+            "blacklist": ["probable_deaths"],
             "csv_options": [
                 {
                     "path": "zipcodes",
@@ -226,6 +228,7 @@ class Config(object):
             "report_name": "COVIDHospitalRegions",
             "basename": "IL_regional_hospital_data_{}",
             "date_format": "%Y-%m-%d",
+            "blacklist": ["probable_deaths"],
             "csv_options": [
                 {
                     "path": "region",
