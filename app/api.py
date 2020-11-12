@@ -238,11 +238,7 @@ def gen_new_records(src, report_date, report_type=None, **kwargs):
             resource_id = options["resource_id"]
             package_id = options["package_id"]
             dates = get_ckan_report_dates_by_id(resource_id)
-
-            if dates:
-                new = [r for r in records if r.get("date") not in dates]
-            else:
-                new = None
+            new = [r for r in records if r.get("date") not in dates] if dates else None
 
             if new:
                 yield (new, resource_id, package_id)
