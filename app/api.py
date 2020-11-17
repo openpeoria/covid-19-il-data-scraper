@@ -358,6 +358,7 @@ def post_ckan_reports(src, report_date, **kwargs):
     mimetype = CTYPES["csv"]
     report_type = kwargs["report_type"]
     config = REPORTS[report_type]
+    report_phrase = get_report_phrase(report_date, report_type)
 
     if kwargs.get("datastore"):
         sources = gen_new_records(src, report_date, **kwargs)
@@ -372,10 +373,10 @@ def post_ckan_reports(src, report_date, **kwargs):
     ok = responses and all(r["ok"] for r in responses)
 
     if ok:
-        message = f"Successfully posted data for date {report_date}!"
+        message = f"Successfully posted data {report_phrase}!"
         status_code = 200
     elif responses:
-        message = f"Error(s) encountered posting data for date {report_date}!"
+        message = f"Error(s) encountered posting data {report_phrase}!"
         status_code = 500
 
         for response in responses:
@@ -383,7 +384,7 @@ def post_ckan_reports(src, report_date, **kwargs):
                 log(**response)
     else:
         ok = True
-        message = f"No data posted for date {report_date}!"
+        message = f"No data posted {report_phrase}!"
         status_code = 304
 
     return {
@@ -733,7 +734,7 @@ REPORT_FUNCS = {
 }
 
 
-def get_report_phrase(report_date, report_type=None, **kwargs):
+def get_report_phrase(report_date, report_type="county", **kwargs):
     return f"for {report_type} report on {report_date}"
 
 
@@ -958,11 +959,14 @@ class Report(MethodView):
 
         ok = result and all(r["ok"] for r in result.values())
 
+        # TODO: figure out how to find which dates erred
+        report_phrase = get_report_phrase(report_date, **self.kwargs)
+
         if ok:
-            message = f"Successfully posted data for date {report_date}!"
+            message = f"Successfully posted data {report_phrase}!"
             status_code = 200
         elif result:
-            message = f"Error(s) encountered posting data for date {report_date}!"
+            message = f"Error(s) encountered posting data {report_phrase}!"
             status_code = 500
 
         response = {
@@ -988,10 +992,10 @@ class Report(MethodView):
                 result[report_date] = _result
 
         if result:
-            message = f"Successfully got data for date {report_date}!"
+            message = f"Successfully got data {report_phrase}!"
             status_code = 200
         else:
-            message = f"Error(s) encountered getting data for date {report_date}!"
+            message = f"Error(s) encountered getting data {report_phrase}!"
             status_code = 500
 
         response = {
@@ -1016,10 +1020,10 @@ class Report(MethodView):
         ok = all(r["ok"] for r in result.values())
 
         if ok:
-            message = f"Successfully deleted data for date {report_date}!"
+            message = f"Successfully deleted data {report_phrase}!"
             status_code = 200
         else:
-            message = f"Error(s) encountered deleting data for date {report_date}!"
+            message = f"Error(s) encountered deleting data {report_phrase}!"
             status_code = 500
 
         response = {
