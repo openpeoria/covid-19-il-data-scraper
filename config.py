@@ -135,7 +135,7 @@ class Config(object):
             "report_name": "COVIDHistoricalTestResults",
             "basename": "IL_county_COVID19_data_{}",
             "date_format": "%m/%d/%Y",
-            "blacklist": [],
+            "blacklist": ["probable_deaths"],
             "csv_options": [
                 {
                     "path": "county",
